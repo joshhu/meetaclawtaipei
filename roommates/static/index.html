@@ -3,187 +3,260 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>室友三人組 - DGX Spark 多 LLM 互動</title>
+<title>AI Summit 2026 - 三巨頭舞台</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
     font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif;
-    background: #1a1a2e;
+    background: #0a0a14;
     color: #eee;
     min-height: 100vh;
     overflow-x: hidden;
   }
 
   header {
-    padding: 12px 24px;
-    background: rgba(0,0,0,0.3);
+    padding: 10px 24px;
+    background: linear-gradient(180deg, #1a0f0f, #0a0a14);
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-bottom: 1px solid rgba(255,255,255,0.1);
+    border-bottom: 2px solid #c9a227;
+    box-shadow: 0 2px 12px rgba(201,162,39,.25);
   }
-
   header h1 {
-    font-size: 18px;
-    font-weight: 500;
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: #f4d35e;
+    text-shadow: 0 0 8px rgba(244,211,94,.4);
   }
-
   .conn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: #aaa;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: #aaa;
   }
   .conn .dot {
     width: 10px; height: 10px; border-radius: 50%;
-    background: #888;
-    transition: background .3s;
+    background: #888; transition: background .3s;
   }
-  .conn.up .dot { background: #4caf50; box-shadow: 0 0 8px #4caf50; }
+  .conn.up .dot { background: #4caf50; box-shadow: 0 0 10px #4caf50; }
   .conn.down .dot { background: #f44336; }
 
   main {
     display: grid;
-    grid-template-columns: 1.4fr 1fr;
-    gap: 16px;
-    padding: 16px;
-    height: calc(100vh - 50px);
+    grid-template-columns: 1.7fr 1fr;
+    gap: 12px;
+    padding: 12px;
+    height: calc(100vh - 48px);
   }
 
-  /* ---- 房間 ---- */
-  .room {
+  /* ============ 舞台 ============ */
+  .stage {
     position: relative;
     background:
-      linear-gradient(180deg, #f4e4c1 0%, #f4e4c1 55%, #c8a878 55%, #c8a878 100%);
+      /* 上方背景 (深紅幕) */
+      linear-gradient(180deg,
+        #2a0a0a 0%,
+        #5a1010 5%,
+        #8b1a1a 18%,
+        #1a0808 55%,    /* 舞台後方陰影 */
+        #2a1a08 60%,
+        #4a2818 70%,
+        #6e3e1e 100%);  /* 舞台木地板 */
     border-radius: 12px;
     overflow: hidden;
-    box-shadow: 0 4px 24px rgba(0,0,0,.4);
-    min-height: 500px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.6);
+    min-height: 600px;
   }
-  /* 牆面裝飾（家具用 emoji 絕對定位） */
-  .room::before {
-    /* 窗戶 */
-    content: "🪟";
-    position: absolute;
-    top: 6%;
-    left: 8%;
-    font-size: 80px;
-    text-shadow: 0 2px 4px rgba(0,0,0,.2);
-  }
-  .room::after {
-    content: "🖼️";
-    position: absolute;
-    top: 8%;
-    right: 12%;
-    font-size: 60px;
-  }
-  .furniture {
-    position: absolute;
-    font-size: 56px;
-    text-shadow: 0 2px 4px rgba(0,0,0,.15);
-    user-select: none;
-  }
-  .couch { bottom: 28%; left: 50%; transform: translateX(-50%); font-size: 110px; }
-  .lamp  { top: 22%; right: 6%; font-size: 50px; }
-  .plant { bottom: 6%; right: 8%; font-size: 56px; }
-  .table { bottom: 8%; left: 18%; font-size: 52px; }
-  .coffee { bottom: 13%; left: 24%; font-size: 28px; }
 
-  /* ---- 角色 ---- */
-  .avatar {
+  /* 紅幕 - 左右 */
+  .stage::before, .stage::after {
+    content: "";
     position: absolute;
-    width: 110px;
+    top: 0; bottom: 35%;
+    width: 90px;
+    background:
+      repeating-linear-gradient(90deg,
+        #4a0a0a 0px,
+        #8b1a1a 8px,
+        #6a1010 16px,
+        #4a0a0a 24px);
+    box-shadow: inset -10px 0 20px rgba(0,0,0,.5);
+    z-index: 2;
+  }
+  .stage::before { left: 0; border-radius: 0 20px 80px 0; }
+  .stage::after { right: 0; transform: scaleX(-1); border-radius: 0 20px 80px 0; }
+
+  /* 舞台 backdrop banner */
+  .backdrop {
+    position: absolute;
+    top: 5%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(180deg, #1a1a2a, #0a0a14);
+    border: 2px solid #c9a227;
+    border-radius: 8px;
+    padding: 10px 30px;
+    box-shadow: 0 0 30px rgba(201,162,39,.4);
+    z-index: 1;
+  }
+  .backdrop h2 {
+    font-size: 16px;
+    color: #f4d35e;
+    letter-spacing: 2px;
     text-align: center;
-    user-select: none;
-    transition: transform .3s;
+    font-weight: 600;
+    text-shadow: 0 0 6px rgba(244,211,94,.5);
   }
-  .avatar .face {
-    font-size: 64px;
-    display: inline-block;
-    transition: transform .3s, filter .3s;
-    filter: grayscale(40%) brightness(0.85);
+  .backdrop .sub {
+    font-size: 10px;
+    color: #aaa;
+    text-align: center;
+    margin-top: 2px;
+    letter-spacing: 1px;
   }
-  .avatar.thinking .face {
-    animation: bob 1.6s ease-in-out infinite;
+
+  /* 舞台燈光 - 從上方往下打 */
+  .spotlights {
+    position: absolute;
+    top: 18%;
+    left: 0; right: 0;
+    height: 50%;
+    pointer-events: none;
   }
-  .avatar.speaking .face {
+  .spot {
+    position: absolute;
+    top: 0;
+    width: 200px;
+    height: 100%;
+    background: radial-gradient(ellipse at top,
+      rgba(255,240,180,.18) 0%,
+      rgba(255,240,180,.08) 30%,
+      transparent 70%);
+    transform-origin: top center;
+  }
+  .spot-1 { left: 18%; transform: skewX(8deg); }
+  .spot-2 { left: 50%; transform: translateX(-50%); }
+  .spot-3 { right: 18%; transform: skewX(-8deg); }
+
+  /* 舞台地板表面光線 */
+  .floor-glow {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 35%;
+    background: linear-gradient(180deg,
+      transparent 0%,
+      rgba(255,200,100,.05) 40%,
+      rgba(255,200,100,.12) 100%);
+    pointer-events: none;
+  }
+
+  /* ============ 講者 ============ */
+  .speaker {
+    position: absolute;
+    width: 280px;
+    text-align: center;
+    z-index: 3;
+    transition: transform .4s ease;
+  }
+  /* 三人位置：兩側往外推、中間往前下一點製造層次 */
+  #sp-Trump  { bottom: 8%; left: 2%; }
+  #sp-Obama  { bottom: 3%; left: 50%; transform: translateX(-50%); }
+  #sp-Jensen { bottom: 8%; right: 2%; }
+
+  .speaker .avatar-wrap {
+    position: relative;
+    width: 260px;
+    height: 260px;
+    margin: 0 auto;
+    border-radius: 50%;
+    overflow: hidden;
+    border: 6px solid #f4d35e;
+    box-shadow: 0 8px 28px rgba(0,0,0,.7), 0 0 28px rgba(244,211,94,.25);
+    background: #2a2a3a;
+    filter: grayscale(50%) brightness(0.7);
+    transition: all .35s ease;
+  }
+  .speaker.thinking .avatar-wrap {
+    animation: bob 1.8s ease-in-out infinite;
+  }
+  .speaker.speaking .avatar-wrap {
     filter: none;
-    transform: scale(1.18);
-    animation: shake .4s ease-in-out 2;
+    transform: scale(1.08);
+    border-color: #ff5252;
+    box-shadow: 0 0 55px rgba(255,82,82,.7), 0 10px 30px rgba(0,0,0,.7);
   }
   @keyframes bob {
     0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-4px); }
+    50% { transform: translateY(-5px); }
   }
-  @keyframes shake {
-    0%, 100% { transform: scale(1.18) rotate(0); }
-    25% { transform: scale(1.18) rotate(-3deg); }
-    75% { transform: scale(1.18) rotate(3deg); }
+  .speaker .avatar {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
   }
-  .avatar .name {
-    margin-top: 4px;
-    font-size: 13px;
-    color: #4a2d1c;
-    font-weight: 600;
-    background: rgba(255,255,255,.7);
-    border-radius: 10px;
-    padding: 2px 8px;
+
+  .speaker .name {
+    margin-top: 14px;
+    font-size: 24px;
+    color: #f4d35e;
+    font-weight: 700;
+    background: rgba(0,0,0,.75);
+    border-radius: 18px;
+    padding: 6px 24px;
     display: inline-block;
+    letter-spacing: 2px;
+    border: 2px solid rgba(244,211,94,.4);
+    text-shadow: 0 0 8px rgba(244,211,94,.3);
   }
-  .avatar .status {
-    font-size: 18px;
-    margin-top: 2px;
-    opacity: 0;
-    transition: opacity .3s;
+  .speaker .who-model {
+    margin-top: 6px;
+    font-size: 12px;
+    color: #888;
+    letter-spacing: 1px;
   }
-  .avatar.thinking .status { opacity: 1; }
 
-  /* 房間位置 */
-  #ag-Alex  { top: 30%; left: 18%; }
-  #ag-Bella { top: 26%; left: 50%; transform: translateX(-50%); }
-  #ag-Carl  { top: 30%; right: 18%; }
-
-  /* ---- speech bubble ---- */
+  /* speech bubble */
   .bubble {
     position: absolute;
-    top: -10px;
+    bottom: calc(100% + 22px);
     left: 50%;
-    transform: translate(-50%, -100%);
-    min-width: 140px;
-    max-width: 260px;
+    transform: translateX(-50%);
+    min-width: 240px;
+    max-width: 440px;
     background: #fff;
-    color: #222;
-    padding: 10px 14px;
-    border-radius: 14px;
-    font-size: 14px;
-    line-height: 1.5;
-    box-shadow: 0 6px 16px rgba(0,0,0,.25);
+    color: #1a1a1a;
+    padding: 18px 24px;
+    border-radius: 20px;
+    font-size: 22px;
+    font-weight: 500;
+    line-height: 1.55;
+    box-shadow: 0 12px 36px rgba(0,0,0,.55), 0 0 24px rgba(255,255,255,.1);
     opacity: 0;
     pointer-events: none;
-    transition: opacity .25s;
+    transition: opacity .3s;
     z-index: 10;
     white-space: pre-wrap;
     word-break: break-word;
+    text-align: left;
   }
   .bubble::after {
-    /* 下方小尖角 */
     content: "";
     position: absolute;
-    bottom: -8px;
+    bottom: -14px;
     left: 50%;
     transform: translateX(-50%);
     width: 0; height: 0;
-    border-left: 8px solid transparent;
-    border-right: 8px solid transparent;
-    border-top: 8px solid #fff;
+    border-left: 14px solid transparent;
+    border-right: 14px solid transparent;
+    border-top: 14px solid #fff;
   }
-  .avatar.speaking .bubble { opacity: 1; }
+  .speaker.speaking .bubble { opacity: 1; }
 
-  /* ---- 右側面板 ---- */
+  /* ============ 右側對話紀錄 ============ */
   aside {
-    background: #25253b;
+    background: #15151f;
+    border: 1px solid #2a2a3a;
     border-radius: 12px;
     display: flex;
     flex-direction: column;
@@ -192,11 +265,12 @@
   }
   aside h2 {
     padding: 12px 16px;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
-    color: #aaa;
-    background: rgba(0,0,0,.2);
-    border-bottom: 1px solid rgba(255,255,255,.06);
+    color: #f4d35e;
+    background: linear-gradient(180deg, #1a1a2a, #15151f);
+    border-bottom: 1px solid rgba(244,211,94,.2);
+    letter-spacing: 1px;
   }
   #log {
     flex: 1;
@@ -206,26 +280,29 @@
     line-height: 1.6;
   }
   #log .entry {
-    margin-bottom: 12px;
+    margin-bottom: 14px;
     opacity: 0;
     animation: fadeIn .4s forwards;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed rgba(255,255,255,.08);
   }
   #log .entry .who {
-    font-weight: 600;
+    font-weight: 700;
     margin-right: 6px;
+    letter-spacing: 0.5px;
   }
   #log .entry .meta {
-    color: #666;
+    color: #555;
     font-size: 11px;
     margin-left: 6px;
   }
   #log .entry .text {
     color: #ddd;
-    margin-top: 2px;
+    margin-top: 4px;
   }
-  .who-Alex  { color: #b39ddb; }
-  .who-Bella { color: #ffb74d; }
-  .who-Carl  { color: #81c784; }
+  .who-Trump  { color: #ff6b6b; }
+  .who-Jensen { color: #51cf66; }
+  .who-Obama  { color: #74c0fc; }
   .who-system { color: #f44336; }
 
   @keyframes fadeIn {
@@ -234,63 +311,75 @@
 
   footer {
     padding: 8px 16px;
-    background: rgba(0,0,0,.2);
-    border-top: 1px solid rgba(255,255,255,.06);
+    background: #0a0a14;
+    border-top: 1px solid #2a2a3a;
     font-size: 11px;
-    color: #888;
+    color: #666;
     display: flex;
     justify-content: space-between;
   }
 
-  @media (max-width: 900px) {
+  @media (max-width: 1200px) {
     main { grid-template-columns: 1fr; height: auto; }
-    .room { min-height: 400px; }
+    .stage { min-height: 600px; }
+    .speaker { width: 200px; }
+    .speaker .avatar-wrap { width: 180px; height: 180px; }
+    .speaker .name { font-size: 18px; padding: 4px 18px; }
+    #sp-Trump  { left: 2%; }
+    #sp-Jensen { right: 2%; }
   }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>🏠 室友三人組 — DGX Spark 多 LLM 即時互動</h1>
+  <h1>🎙️ AI SUMMIT 2026 — 三巨頭舞台對談</h1>
   <div class="conn down" id="conn"><span class="dot"></span><span id="conn-text">連線中…</span></div>
 </header>
 
 <main>
-  <section class="room" id="room">
-    <!-- 家具 -->
-    <div class="furniture couch">🛋️</div>
-    <div class="furniture lamp">💡</div>
-    <div class="furniture plant">🌿</div>
-    <div class="furniture table">🪑</div>
-    <div class="furniture coffee">☕</div>
+  <section class="stage" id="stage">
+    <!-- backdrop banner -->
+    <div class="backdrop">
+      <h2>AI &amp; THE NEXT DECADE</h2>
+      <div class="sub">— DGX Spark Powered · Taipei —</div>
+    </div>
 
-    <!-- 角色（會由 JS 加 thinking/speaking class） -->
-    <div class="avatar" id="ag-Alex">
-      <div class="bubble" id="bubble-Alex"></div>
-      <div class="face">🤔</div>
-      <div class="name">Alex</div>
-      <div class="status">💭</div>
+    <!-- 燈光 -->
+    <div class="spotlights">
+      <div class="spot spot-1"></div>
+      <div class="spot spot-2"></div>
+      <div class="spot spot-3"></div>
     </div>
-    <div class="avatar" id="ag-Bella">
-      <div class="bubble" id="bubble-Bella"></div>
-      <div class="face">😊</div>
-      <div class="name">Bella</div>
-      <div class="status">💭</div>
+    <div class="floor-glow"></div>
+
+    <!-- 三位講者 -->
+    <div class="speaker" id="sp-Trump">
+      <div class="bubble" id="bubble-Trump"></div>
+      <div class="avatar-wrap"><img class="avatar" src="/static/trump.jpg" alt="Trump"></div>
+      <div class="name">Trump</div>
+      <div class="who-model">qwen36 · 27B</div>
     </div>
-    <div class="avatar" id="ag-Carl">
-      <div class="bubble" id="bubble-Carl"></div>
-      <div class="face">🍳</div>
-      <div class="name">Carl</div>
-      <div class="status">💭</div>
+    <div class="speaker" id="sp-Obama">
+      <div class="bubble" id="bubble-Obama"></div>
+      <div class="avatar-wrap"><img class="avatar" src="/static/obama.jpg" alt="Obama"></div>
+      <div class="name">Obama</div>
+      <div class="who-model">gemma4 · 31B</div>
+    </div>
+    <div class="speaker" id="sp-Jensen">
+      <div class="bubble" id="bubble-Jensen"></div>
+      <div class="avatar-wrap"><img class="avatar" src="/static/jensen.jpg" alt="Jensen"></div>
+      <div class="name">Jensen Huang</div>
+      <div class="who-model">nemotron · 12B</div>
     </div>
   </section>
 
   <aside>
-    <h2>對話紀錄</h2>
+    <h2>🎤 對談實況</h2>
     <div id="log"></div>
     <footer>
-      <span>Alex=qwen36 · Bella=gemma4 · Carl=nemotron</span>
-      <span id="stats">回合: 0</span>
+      <span>3 LLMs 同時思考、最快出口先說</span>
+      <span id="stats">第 0 輪</span>
     </footer>
   </aside>
 </main>
@@ -300,52 +389,51 @@ const conn = document.getElementById("conn");
 const connText = document.getElementById("conn-text");
 const log = document.getElementById("log");
 const stats = document.getElementById("stats");
-const NAMES = ["Alex", "Bella", "Carl"];
+const NAMES = ["Trump", "Obama", "Jensen"];
 
 let rounds = 0;
 let ws = null;
-let reconnectTimer = null;
 
 function setConn(state, text) {
   conn.className = "conn " + state;
   connText.textContent = text;
 }
 
-function clearAllThinking() {
+function clearAllStates() {
   for (const n of NAMES) {
-    document.getElementById("ag-" + n).classList.remove("thinking", "speaking");
+    const el = document.getElementById("sp-" + n);
+    if (el) el.classList.remove("thinking", "speaking");
   }
 }
 
 function setThinking(candidates) {
-  clearAllThinking();
+  clearAllStates();
   for (const n of candidates) {
-    const el = document.getElementById("ag-" + n);
+    const el = document.getElementById("sp-" + n);
     if (el) el.classList.add("thinking");
   }
 }
 
 function speak(speaker, text, elapsedMs) {
-  clearAllThinking();
+  clearAllStates();
   if (speaker === "system") {
     addLog("system", text, elapsedMs);
     return;
   }
-  const el = document.getElementById("ag-" + speaker);
+  const el = document.getElementById("sp-" + speaker);
   const bubble = document.getElementById("bubble-" + speaker);
   if (!el || !bubble) return;
   bubble.textContent = "";
   el.classList.add("speaking");
-  // 打字機效果
   let i = 0;
   const tick = () => {
     bubble.textContent = text.slice(0, ++i);
-    if (i < text.length) setTimeout(tick, 35);
+    if (i < text.length) setTimeout(tick, 40);
   };
   tick();
   addLog(speaker, text, elapsedMs);
   rounds++;
-  stats.textContent = "回合: " + rounds;
+  stats.textContent = "第 " + rounds + " 輪";
 }
 
 function addLog(speaker, text, elapsedMs) {
@@ -366,15 +454,13 @@ function connect() {
   ws.onopen = () => setConn("up", "已連線");
   ws.onclose = () => {
     setConn("down", "斷線，5 秒後重連…");
-    clearAllThinking();
-    reconnectTimer = setTimeout(connect, 5000);
+    clearAllStates();
+    setTimeout(connect, 5000);
   };
   ws.onerror = () => setConn("down", "連線錯誤");
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
-    if (m.type === "hello") {
-      // ignore for now，使用前端固定的 3 個角色
-    } else if (m.type === "thinking") {
+    if (m.type === "thinking") {
       setThinking(m.candidates || NAMES);
     } else if (m.type === "say") {
       speak(m.speaker, m.text, m.elapsed_ms);

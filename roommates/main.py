@@ -1,4 +1,4 @@
-"""三個 LLM 室友的電子魚缸：FastAPI + WebSocket + race orchestrator。"""
+"""舞台三巨頭：Trump / Jensen / Obama 演講辯論 — FastAPI + WebSocket race orchestrator。"""
 
 from __future__ import annotations
 
@@ -19,18 +19,20 @@ log = logging.getLogger("roommates")
 
 # ---- agent 設定 ----------------------------------------------------------
 
-ROOM_INTRO = (
-    "你和兩個室友在台北合租的公寓客廳。現在是週五晚上，剛吃完飯，"
-    "三個人坐在沙發上隨意聊天。請依角色自然發言，回應上一個人說的話。"
+STAGE_INTRO = (
+    "現在是 2026 年「AI Summit 台北」的開幕論壇，三位重量級講者同台對談："
+    "主題是「AI 與人類的下一個十年」。台下坐滿觀眾，你們輪流發言，"
+    "互相補充、偶爾交鋒。請完全以你的人物口吻發言，模仿那個人公開的講話風格。"
 )
 
 COMMON_RULES = (
     "重要規則：\n"
-    "1. 每次只說 1-2 句、最多 50 個中文字\n"
-    "2. 用繁體中文（台灣口語）\n"
-    "3. 不要列點、不要 markdown、不要表情符號\n"
-    "4. 要回應上一個人說的內容（針對他的話接話）\n"
-    "5. 不要每次都自我介紹，把它當朋友聊天\n"
+    "1. 每次只說 1-2 句、最多 50 個中文字（短而有力的金句最讚）\n"
+    "2. 用繁體中文（如果是 Trump 可以混一兩個簡單英文字）\n"
+    "3. 不要列點、不要 markdown、不要表情符號、不要旁白動作\n"
+    "4. 要針對上一個講者剛說的話接話（呼應、補充、或反駁）\n"
+    "5. 不要每次自我介紹，假設大家都認識你\n"
+    "6. 內容輕鬆幽默為主，不要碰敏感政治攻擊\n"
 )
 
 
@@ -41,6 +43,7 @@ class Agent:
     role: str  # 用在 system prompt
     base_url: str
     model: str
+    avatar: str = ""  # 前端用的圖檔名（在 static/）
     extra: dict = field(default_factory=dict)  # extra body params for OpenAI
 
     def __post_init__(self):
@@ -50,8 +53,8 @@ class Agent:
         others = [a.name for a in AGENTS if a.name != self.name]
         return (
             f"你是 {self.name}。{self.role}\n\n"
-            f"{ROOM_INTRO}\n\n"
-            f"你的室友是 {' 和 '.join(others)}。\n\n"
+            f"{STAGE_INTRO}\n\n"
+            f"同台的另外兩位是 {' 和 '.join(others)}。\n\n"
             f"{COMMON_RULES}"
         )
 
@@ -89,36 +92,44 @@ class Agent:
 
 AGENTS = [
     Agent(
-        name="Alex",
-        emoji="🤔",
+        name="Obama",
+        emoji="🇺🇸",
+        avatar="obama.jpg",
         role=(
-            "哲學系研究生，個性偏內向但愛分析。講話有層次、會引用一些概念，"
-            "但要克制不要長篇大論。常常會質疑前面的人或補充另一個角度。"
-        ),
-        base_url="http://localhost:8002/v1",
-        model="qwen36",
-        # 試圖讓 Qwen3.6 不要進 thinking 模式（不一定有效但加上）
-        extra={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
-    ),
-    Agent(
-        name="Bella",
-        emoji="😊",
-        role=(
-            "外向社交咖，剛從廣告公司下班。個性熱情、主動帶話題、語氣輕快，"
-            "喜歡分享今天遇到的趣事，也愛幫朋友打氣。"
+            "你是前美國總統 Barack Obama。講話風格沉穩有節奏、會用「我們」拉近距離，"
+            "喜歡引用希望與團結的概念，常常用「Let me be clear」或「讓我這樣說」開頭。"
+            "句子要有抑揚頓挫，偶爾用一個短停頓（...）。中文以正式而溫暖的口吻。"
         ),
         base_url="http://localhost:8001/v1",
         model="gemma4",
     ),
     Agent(
-        name="Carl",
-        emoji="🍳",
+        name="Jensen",
+        emoji="🧥",
+        avatar="jensen.jpg",
         role=(
-            "理工男，軟體工程師，個性實事求是，講話簡短直接。"
-            "對生活瑣事務實，常常給簡單的解決方案而不是討論。"
+            "你是 NVIDIA CEO 黃仁勳（Jensen Huang）。台裔美國人，喜歡穿黑色皮夾克。"
+            "講話會大量使用 AI、GPU、CUDA、Blackwell、加速運算、AI 工廠 這類技術詞，"
+            "語氣興奮、對未來樂觀，偶爾混一兩個英文單字。"
+            "常說「我們正在進入一個全新的運算時代」、「the more you buy, the more you save」。"
+            "**必須用繁體中文，絕對不要用簡體字（不能用「当然/单/广/会」要寫「當然/單/廣/會」）。**"
         ),
         base_url="http://localhost:8003/v1",
         model="nemotron",
+    ),
+    Agent(
+        name="Trump",
+        emoji="🇺🇸",
+        avatar="trump.jpg",
+        role=(
+            "你是前美國總統 Donald Trump。講話風格直接、用詞簡單、愛用最高級「最棒的」「前所未有」「相信我」。"
+            "短句、自信、有點誇張，常說「many people are saying」「nobody knows X better than me」。"
+            "中文盡量口語、有時穿插一兩個英文字（tremendous / huge / believe me）。"
+            "輕鬆幽默為主，不要做政治攻擊。"
+        ),
+        base_url="http://localhost:8002/v1",
+        model="qwen36",
+        extra={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
     ),
 ]
 
@@ -127,14 +138,27 @@ AGENT_BY_NAME = {a.name: a for a in AGENTS}
 # ---- race orchestrator ---------------------------------------------------
 
 
-async def race_round(history: list[dict], last_winner: str | None) -> tuple[str, str, float]:
+async def race_round(
+    history: list[dict],
+    last_winner: str | None,
+    speak_count: dict[str, int],
+) -> tuple[str, str, float]:
     """三人同時 generate，最快完成的勝出；上輪 winner 不參與本輪。
+
+    公平規則：如果任何人 speak_count 比最多者少 3 以上，下一輪只有他能講（solo）。
 
     Returns (speaker_name, text, elapsed_seconds)。
     """
-    candidates = [a for a in AGENTS if a.name != last_winner]
-    if not candidates:
-        candidates = list(AGENTS)
+    max_c = max(speak_count.values()) if speak_count else 0
+    starving = [name for name, c in speak_count.items() if max_c - c >= 2]
+    if starving:
+        # 強制給最久沒講的人 solo
+        candidates = [a for a in AGENTS if a.name in starving]
+        log.info("Fairness kick-in: %s solo (counts=%s)", starving, speak_count)
+    else:
+        candidates = [a for a in AGENTS if a.name != last_winner]
+        if not candidates:
+            candidates = list(AGENTS)
 
     start = time.monotonic()
     tasks: dict[asyncio.Task, Agent] = {}
@@ -195,7 +219,10 @@ async def root():
 async def health():
     return {
         "ok": True,
-        "agents": [{"name": a.name, "emoji": a.emoji, "endpoint": a.base_url} for a in AGENTS],
+        "agents": [
+            {"name": a.name, "emoji": a.emoji, "avatar": a.avatar, "endpoint": a.base_url}
+            for a in AGENTS
+        ],
     }
 
 
@@ -206,6 +233,7 @@ async def ws(ws: WebSocket):
 
     history: list[dict] = []
     last_winner: str | None = None
+    speak_count: dict[str, int] = {a.name: 0 for a in AGENTS}
 
     async def send(payload: dict):
         await ws.send_text(json.dumps(payload, ensure_ascii=False))
@@ -213,7 +241,7 @@ async def ws(ws: WebSocket):
     # 初始 hello
     await send({
         "type": "hello",
-        "agents": [{"name": a.name, "emoji": a.emoji} for a in AGENTS],
+        "agents": [{"name": a.name, "emoji": a.emoji, "avatar": a.avatar} for a in AGENTS],
     })
 
     try:
@@ -225,7 +253,7 @@ async def ws(ws: WebSocket):
             })
 
             try:
-                speaker, text, elapsed = await race_round(history, last_winner)
+                speaker, text, elapsed = await race_round(history, last_winner, speak_count)
             except Exception as e:
                 log.exception("round error: %s", e)
                 await send({"type": "error", "message": str(e)[:200]})
@@ -242,6 +270,7 @@ async def ws(ws: WebSocket):
             if speaker != "system":
                 history.append({"speaker": speaker, "text": text})
                 last_winner = speaker
+                speak_count[speaker] = speak_count.get(speaker, 0) + 1
                 # 只留最近 10 輪
                 history = history[-10:]
 
