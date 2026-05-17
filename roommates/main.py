@@ -335,6 +335,10 @@ async def ws(ws: WebSocket):
                     paused = False
                     log.info("topic set: %r", topic)
                     await send({"type": "topic_set", "topic": topic})
+                elif m.get("type") == "stop":
+                    paused = True
+                    log.info("stopped by user")
+                    await send({"type": "stopped"})
         except WebSocketDisconnect:
             paused = True
 
@@ -371,7 +375,10 @@ async def ws(ws: WebSocket):
             history.append({"speaker": agent.name, "text": text})
             history = history[-12:]  # 留最近 12 句
 
-            await asyncio.sleep(3.0)
+            # 等前端打字機跑完 + 1.2s 緩衝給用戶讀完
+            # 前端打字速度 40ms/char
+            typing_seconds = len(text) * 0.040
+            await asyncio.sleep(max(2.5, typing_seconds + 1.2))
     except WebSocketDisconnect:
         log.info("client disconnected")
     except Exception as e:

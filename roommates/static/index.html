@@ -362,6 +362,11 @@
   }
   .topic-bar button:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(244,211,94,.4); }
   .topic-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .topic-bar button.stop-btn {
+    background: linear-gradient(180deg, #ff8a80, #c62828);
+    color: #fff;
+  }
+  .topic-bar button.stop-btn:hover { box-shadow: 0 4px 12px rgba(255,82,82,.4); }
   #topic-current {
     color: #f4d35e;
     font-size: 13px;
@@ -411,6 +416,7 @@
 <div class="topic-bar">
   <input id="topic-input" placeholder="輸入今日論壇主題（例：DeepSeek V4 為什麼這麼強？ / Llama 5 最新進展 / NVIDIA Rubin 規格）" autocomplete="off"/>
   <button id="topic-btn">開始討論</button>
+  <button id="stop-btn" class="stop-btn">⏹ 停止</button>
   <span id="topic-current"></span>
 </div>
 
@@ -560,6 +566,9 @@ function connect() {
       log.innerHTML = "";
       rounds = 0;
       stats.textContent = "第 0 輪";
+    } else if (m.type === "stopped") {
+      clearAllStates();
+      addLog("system", "對話已停止。輸入新主題重新開始。");
     } else if (m.type === "searching") {
       setSearching(m.speaker, m.query);
     } else if (m.type === "search_done") {
@@ -576,15 +585,21 @@ function connect() {
 
 connect();
 
-// ---- Topic input ----
+// ---- Topic input + stop ----
 const topicInput = document.getElementById("topic-input");
 const topicBtn = document.getElementById("topic-btn");
+const stopBtn = document.getElementById("stop-btn");
 function submitTopic() {
   const t = topicInput.value.trim();
   if (!t || !ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({type: "set_topic", topic: t}));
 }
+function stopChat() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({type: "stop"}));
+}
 topicBtn.addEventListener("click", submitTopic);
+stopBtn.addEventListener("click", stopChat);
 topicInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") submitTopic();
 });
