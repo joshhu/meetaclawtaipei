@@ -328,14 +328,91 @@
     #sp-Trump  { left: 2%; }
     #sp-Jensen { right: 2%; }
   }
+
+  /* ============ Topic bar (v3) ============ */
+  .topic-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: linear-gradient(180deg, #1a1a2a, #15151f);
+    border-bottom: 1px solid rgba(244,211,94,.2);
+  }
+  .topic-bar input {
+    flex: 1;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid #3a3a4a;
+    background: #0a0a14;
+    color: #eee;
+    font-size: 14px;
+    font-family: inherit;
+  }
+  .topic-bar input:focus { outline: 2px solid #f4d35e; }
+  .topic-bar button {
+    padding: 10px 20px;
+    border-radius: 8px;
+    border: none;
+    background: linear-gradient(180deg, #f4d35e, #c9a227);
+    color: #1a0808;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    letter-spacing: 1px;
+  }
+  .topic-bar button:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(244,211,94,.4); }
+  .topic-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #topic-current {
+    color: #f4d35e;
+    font-size: 13px;
+    font-weight: 600;
+    margin-left: 8px;
+  }
+  #topic-current::before { content: "📌 "; }
+
+  /* ============ Search indicator (v3) ============ */
+  .search-tag {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1a1a2a;
+    border: 2px solid #51cf66;
+    color: #b3ffce;
+    padding: 6px 14px;
+    border-radius: 14px;
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 6px 16px rgba(0,0,0,.5), 0 0 16px rgba(81,207,102,.4);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 11;
+    white-space: nowrap;
+    max-width: 380px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: opacity .25s;
+  }
+  .speaker.searching .search-tag { opacity: 1; animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 16px rgba(81,207,102,.4); }
+    50% { box-shadow: 0 0 28px rgba(81,207,102,.8); }
+  }
+  .who-search { color: #51cf66; font-style: italic; }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>🎙️ AI SUMMIT 2026 — 三巨頭舞台對談</h1>
+  <h1>🎙️ AI SUMMIT 2026 — 三巨頭舞台對談 (with web search)</h1>
   <div class="conn down" id="conn"><span class="dot"></span><span id="conn-text">連線中…</span></div>
 </header>
+
+<div class="topic-bar">
+  <input id="topic-input" placeholder="輸入今日論壇主題（例：DeepSeek V4 為什麼這麼強？ / Llama 5 最新進展 / NVIDIA Rubin 規格）" autocomplete="off"/>
+  <button id="topic-btn">開始討論</button>
+  <span id="topic-current"></span>
+</div>
 
 <main>
   <section class="stage" id="stage">
@@ -356,21 +433,24 @@
     <!-- 三位講者 -->
     <div class="speaker" id="sp-Trump">
       <div class="bubble" id="bubble-Trump"></div>
+      <div class="search-tag" id="search-Trump"></div>
       <div class="avatar-wrap"><img class="avatar" src="/static/trump.jpg" alt="Trump"></div>
       <div class="name">Trump</div>
-      <div class="who-model">qwen36 · 27B</div>
+      <div class="who-model">qwen36 · 27B · 🔍</div>
     </div>
     <div class="speaker" id="sp-Obama">
       <div class="bubble" id="bubble-Obama"></div>
+      <div class="search-tag" id="search-Obama"></div>
       <div class="avatar-wrap"><img class="avatar" src="/static/obama.jpg" alt="Obama"></div>
       <div class="name">Obama</div>
-      <div class="who-model">gemma4 · 31B</div>
+      <div class="who-model">gemma4 · 31B · 不搜尋</div>
     </div>
     <div class="speaker" id="sp-Jensen">
       <div class="bubble" id="bubble-Jensen"></div>
+      <div class="search-tag" id="search-Jensen"></div>
       <div class="avatar-wrap"><img class="avatar" src="/static/jensen.jpg" alt="Jensen"></div>
       <div class="name">Jensen Huang</div>
-      <div class="who-model">nemotron · 12B</div>
+      <div class="who-model">nemotron · 12B · 🔍</div>
     </div>
   </section>
 
@@ -402,8 +482,22 @@ function setConn(state, text) {
 function clearAllStates() {
   for (const n of NAMES) {
     const el = document.getElementById("sp-" + n);
-    if (el) el.classList.remove("thinking", "speaking");
+    if (el) el.classList.remove("thinking", "speaking", "searching");
   }
+}
+
+function setSearching(speaker, query) {
+  const el = document.getElementById("sp-" + speaker);
+  const tag = document.getElementById("search-" + speaker);
+  if (!el || !tag) return;
+  tag.textContent = "🔍 搜尋: " + (query || "");
+  el.classList.add("searching");
+  addLog(speaker, "🔍 搜尋: " + query, null, true);
+}
+
+function clearSearching(speaker) {
+  const el = document.getElementById("sp-" + speaker);
+  if (el) el.classList.remove("searching");
 }
 
 function setThinking(candidates) {
@@ -436,11 +530,12 @@ function speak(speaker, text, elapsedMs) {
   stats.textContent = "第 " + rounds + " 輪";
 }
 
-function addLog(speaker, text, elapsedMs) {
+function addLog(speaker, text, elapsedMs, isSearch) {
   const div = document.createElement("div");
   div.className = "entry";
   const meta = elapsedMs ? `<span class="meta">${(elapsedMs/1000).toFixed(1)}s</span>` : "";
-  div.innerHTML = `<span class="who who-${speaker}">${speaker}</span>${meta}<div class="text"></div>`;
+  const whoClass = isSearch ? "who-search" : ("who-" + speaker);
+  div.innerHTML = `<span class="who ${whoClass}">${speaker}</span>${meta}<div class="text"></div>`;
   div.querySelector(".text").textContent = text;
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
@@ -460,7 +555,16 @@ function connect() {
   ws.onerror = () => setConn("down", "連線錯誤");
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
-    if (m.type === "thinking") {
+    if (m.type === "topic_set") {
+      document.getElementById("topic-current").textContent = m.topic;
+      log.innerHTML = "";
+      rounds = 0;
+      stats.textContent = "第 0 輪";
+    } else if (m.type === "searching") {
+      setSearching(m.speaker, m.query);
+    } else if (m.type === "search_done") {
+      clearSearching(m.speaker);
+    } else if (m.type === "thinking") {
       setThinking(m.candidates || NAMES);
     } else if (m.type === "say") {
       speak(m.speaker, m.text, m.elapsed_ms);
@@ -471,6 +575,19 @@ function connect() {
 }
 
 connect();
+
+// ---- Topic input ----
+const topicInput = document.getElementById("topic-input");
+const topicBtn = document.getElementById("topic-btn");
+function submitTopic() {
+  const t = topicInput.value.trim();
+  if (!t || !ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({type: "set_topic", topic: t}));
+}
+topicBtn.addEventListener("click", submitTopic);
+topicInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") submitTopic();
+});
 </script>
 </body>
 </html>
