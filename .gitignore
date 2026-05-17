@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+
+# uv / venv
+.venv/
+venv/
+env/
+
+# 環境變數（範本 .env.example 會 commit）
+.env
+.env.local
+.env.*.local
+
+# IDE / 編輯器
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Claude / AI 工具暫存
+.claude/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# Models（避免不小心 commit 大檔，這專案的模型在 ~/.cache/huggingface 不在這）
+*.safetensors
+*.bin
+*.gguf
