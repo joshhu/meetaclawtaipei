@@ -221,8 +221,13 @@ class Agent:
         kwargs.update(self.extra)
 
         # tool loop，最多 3 輪以防無限
-        for _ in range(3):
-            resp = await self.client.chat.completions.create(messages=msgs, **kwargs)
+        for iteration in range(3):
+            # 第 1 輪強制 search（如果是可搜尋的 agent）→ 確保至少搜一次
+            # 第 2+ 輪改 auto 讓 model 決定要不要再搜
+            iter_kwargs = dict(kwargs)
+            if iteration == 0 and self.can_search:
+                iter_kwargs["tool_choice"] = "required"
+            resp = await self.client.chat.completions.create(messages=msgs, **iter_kwargs)
             msg = resp.choices[0].message
             tool_calls = msg.tool_calls or []
 
@@ -284,6 +289,19 @@ class Agent:
                                 })()
                             })())
                             break  # 只抓第一個避免重複
+                # Gemma 4 格式: call:web_search{query:KEYWORDS}
+                if not synthetic:
+                    for m in re.finditer(r'call:(\w+)\s*\{\s*query\s*:\s*([^}]+?)\s*\}', msg.content):
+                        fn_name = m.group(1)
+                        if fn_name == "web_search":
+                            synthetic.append(type("TC", (), {
+                                "id": f"manual-{len(synthetic)}",
+                                "function": type("F", (), {
+                                    "name": fn_name,
+                                    "arguments": json.dumps({"query": m.group(2).strip()}),
+                                })()
+                            })())
+                            break
                 if synthetic:
                     tool_calls = synthetic
                     log.info("Manually parsed %d tool_calls from %s", len(synthetic), self.name)
@@ -291,6 +309,7 @@ class Agent:
                     msg.content = re.sub(r"<tool_call>.*?</tool_call>", "", msg.content, flags=re.S)
                     msg.content = re.sub(r"<TOOLCALL>.*?</TOOLCALL>", "", msg.content, flags=re.S)
                     msg.content = re.sub(r'web_search\(\s*"[^"]+"\s*\)', "", msg.content)
+                    msg.content = re.sub(r'call:\w+\s*\{[^}]*\}', "", msg.content)
                     msg.content = re.sub(r'Web Search Result:[^\n]*', "", msg.content).strip()
 
             if not tool_calls:
@@ -360,6 +379,8 @@ class Agent:
         text = text or ""
         # 移除我們 prefill 的英文前綴
         text = re.sub(r"^\s*\(?\s*In English\s*\)?\s*[:：]?\s*", "", text)
+        # gemma4 內部 reasoning 洩漏：以 "thought" / "thoughts" / "thinking" 開頭
+        text = re.sub(r"^\s*(?:thoughts?|thinking)\s*[:：\-—]?\s*", "", text, flags=re.I)
         # 強力清理：未閉合 / 多餘的 tool call 標記（qwen3, hermes, nemotron, llama 各種變體）
         text = re.sub(r"<tool_call>.*?(?:</tool_call>|$)", "", text, flags=re.S | re.I)
         text = re.sub(r"<TOOLCALL>.*?(?:</TOOLCALL>|$)", "", text, flags=re.S | re.I)
@@ -399,16 +420,16 @@ AGENTS = [
             "You are former US President Barack Obama. Measured, oratorical, "
             "uses 'we' to connect. Often opens with 'Let me be clear' or 'Look,'. "
             "Themes of hope and unity. Brief reflective pauses (...). "
-            "You do NOT search the web yourself — you comment on what the other two have found."
+            "Use web_search when the topic involves facts or current events you want to ground your reflection in."
         ),
         role_zh=(
             "你是前美國總統 Barack Obama。沉穩有節奏、用「我們」拉近距離，"
             "常用「讓我這樣說」開頭。句子有抑揚頓挫、偶爾停頓（...）。"
-            "你不自己上網搜尋，而是根據另兩人找到的資料做平衡評論。"
+            "如果話題涉及具體事實或近期事件，請用 web_search 查證後再評論。"
         ),
         base_url="http://localhost:8001/v1",
         model="gemma4",
-        can_search=False,
+        can_search=True,
     ),
     Agent(
         name="Jensen",
@@ -439,14 +460,14 @@ AGENTS = [
             "You are former US President Donald Trump. Direct, simple words, lots of superlatives: "
             "'tremendous', 'huge', 'the best', 'believe me', 'many people are saying', "
             "'nobody knows X better than me'. Short punchy sentences, brash confidence. "
-            "Keep it playful — no political attacks. Use web_search before answering "
-            "topics involving facts, news, numbers."
+            "Keep it playful — no political attacks. "
+            "**Important: ALWAYS call web_search first to fetch real data, then add your Trump-style commentary on top.**"
         ),
         role_zh=(
             "你是前美國總統 Donald Trump。直白、用詞簡單、愛用最高級「最棒的」「前所未有」「相信我」。"
             "短句、自信，常說「many people are saying」「nobody knows X better than me」。"
             "中文穿插一兩個英文字（tremendous / huge / believe me）。輕鬆幽默、不政治攻擊。"
-            "話題涉及新聞、數字、時事請先用 web_search 查資料。"
+            "**重要：每次發言前先用 web_search 抓真實資料，再加上你的 Trump 風格評論。**"
         ),
         base_url="http://localhost:8002/v1",
         model="qwen36",
