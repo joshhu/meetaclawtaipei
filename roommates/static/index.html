@@ -506,6 +506,32 @@ function clearSearching(speaker) {
   if (el) el.classList.remove("searching");
 }
 
+// 音檔播放 — 收到 base64 → blob → Audio.play()
+// 維持單一 audio 物件，新音檔來就停掉舊的
+let currentAudio = null;
+function playAudio(speaker, b64, fmt) {
+  try {
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio.src = "";
+    }
+    // base64 → Uint8Array → Blob
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], {type: fmt === "wav" ? "audio/wav" : "audio/mpeg"});
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.volume = 0.95;
+    audio.onended = () => URL.revokeObjectURL(url);
+    audio.onerror = () => console.error("audio error", speaker);
+    audio.play().catch(e => console.warn("audio.play() rejected:", e));
+    currentAudio = audio;
+  } catch (e) {
+    console.error("playAudio failed:", e);
+  }
+}
+
 function setThinking(candidates) {
   clearAllStates();
   for (const n of candidates) {
@@ -566,6 +592,8 @@ function connect() {
       log.innerHTML = "";
       rounds = 0;
       stats.textContent = "第 0 輪";
+    } else if (m.type === "audio") {
+      playAudio(m.speaker, m.audio_b64, m.format || "wav");
     } else if (m.type === "stopped") {
       clearAllStates();
       addLog("system", "對話已停止。輸入新主題重新開始。");

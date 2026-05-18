@@ -1,88 +1,110 @@
-# AI Summit 三巨頭舞台 (v3 — with web search)
+# AI Summit 三巨頭舞台 (v4 — TTS voice clone)
 
-三個 LLM 分別扮演 Trump / Obama / Jensen Huang，在虛擬演講舞台上對談任意主題。**Trump 與 Jensen 能即時上網搜尋（DuckDuckGo）**取得最新資訊；Obama 不搜，根據兩人查到的資料做平衡評論。
+三個 LLM 分別扮演 Trump / Obama / Jensen Huang，在虛擬演講舞台上對談任意主題。
 
-跑在 DGX Spark 上。
+**v4 新增：講話時用 Qwen3-TTS 1.7B 模型 voice clone 本人聲音同步發聲**。
 
-## 角色
+## 功能總覽
 
-| 講者 | LLM (port) | 個性 → 強項 | 能 search？ |
+| 元件 | 角色 | port |
+|---|---|---|
+| **vLLM × 3** | gemma4/qwen36/nemotron LLM | 8001/8002/8003 |
+| **TTS server** | Qwen3-TTS-12Hz-1.7B-Base voice clone | 5051 |
+| **主 web** | FastAPI + WebSocket UI | 5050 |
+
+## 角色映射
+
+| 講者 | LLM | 能 search? | 聲音來源（voice clone）|
 |---|---|---|---|
-| 🇺🇸 **Trump** | qwen36 (8002) | 簡短自信、超 catchphrases | ✅ |
-| 🇺🇸 **Obama** | gemma4 (8001) | 沉穩平衡、用「我們」拉近 | ❌（只評論） |
-| 🧥 **Jensen Huang** | nemotron (8003) | NVIDIA 自家模型扮自家 CEO、技術詞滿載 | ✅ |
-
-發言順序為 **round-robin**（Obama → Jensen → Trump 輪替），每人輪到時可以呼叫 `web_search` 工具拿即時資料。
+| 🇺🇸 **Trump** | qwen36 | ✅ | `voices/trump.mp3`（與習近平國宴致詞）|
+| 🇺🇸 **Obama** | gemma4 | ❌（評論） | `voices/obama.mp3`（黑人四分衛訪談）|
+| 🧥 **Jensen** | nemotron | ✅ | `voices/huang.mp3`（「電子化為 token」演講）|
 
 ## 啟動
 
 ```bash
-# 1. 確認 3 個 vLLM 服務在跑（要含 --enable-auto-tool-choice 標）
+# 1. 確認 3 個 vLLM 服務在跑
 cd /home/joshhu/workspace/meetaclawtaipei
 docker compose ps
 
-# 2. 跑 demo
+# 2. 一鍵跑 demo（同時啟動 TTS server + 主 server）
 cd roommates
-uv sync          # 首次：建 venv 裝套件 (fastapi、uvicorn、openai、ddgs)
-./run.sh         # 預設 port 5050
+uv sync                # 首次：建 venv 裝套件 (fastapi、openai、ddgs、qwen-tts、torch...)
+./run_all.sh           # 預設主 server port 5050、TTS 5051
 ```
 
-打開 `http://<dgx-spark-ip>:5050`：
+首次啟動：
+- TTS 模型載入 ~35s
+- 3 位 voice prompt 預先 build ~2s
+- 之後每次 TTS 生成 3-10s
 
-1. 上方「主題列」輸入今日論壇主題（例：`NVIDIA Rubin 規格`、`DeepSeek V4 速度`、`Llama 5 何時出？`）
-2. 按「開始討論」
-3. 三人開始輪流發言，能搜尋的（Trump + Jensen）會顯示 🔍 indicator
+打開 `http://<dgx-spark-ip>:5050`，輸入主題、按開始討論，三人會輪流發言並出聲。
 
-## UI 介面
+## v4 架構
 
-- **主題輸入列**：金色按鈕 + 提示文字
-- **舞台**：紅幕、金色 backdrop banner、燈光
-- **3 個圓形大頭像**：講話時放大發光
-- **Speech bubble**：頭頂浮現、打字機效果
-- **🔍 搜尋 indicator**：搜尋中的講者頭頂出現綠色脈動標
-- **右側對話 log**：累積完整紀錄，含搜尋查詢
+```
+LLM 產生文字 (5-15s)
+    │
+    ├─→ "say" event → 前端 bubble 打字機
+    │
+    └─→ TTS server /tts {speaker, text}
+            │
+            └─→ "audio" event (base64 WAV) → 前端 Audio.play()
 
-## vLLM tool calling 設定
+主迴圈 await TTS task 完成才下一輪，避免跨輪音檔衝突
+```
 
-`docker-compose.yml` 中的 tool 參數：
-- **qwen36**：`--enable-auto-tool-choice --tool-call-parser=hermes`
-- **nemotron**：`--enable-auto-tool-choice --tool-call-parser=pythonic`
-  - 加 fallback：手動 parse `<TOOLCALL>[...]</TOOLCALL>` 格式
-- **gemma4**：無 tool calling（vLLM 在 4.x 對 Gemma 4 的 parser 支援待加）
+## 自訂自己的聲音
 
-## API 端點
+放 mp3 進 `voices/` 並提供文字稿：
 
-- `/` — 前端
-- `/static/*` — 圖檔
-- `/health` — JSON 健康檢查（含 can_search）
-- `/ws` — WebSocket
-  - Server → Client: `hello / topic_set / thinking / searching / search_done / say / error`
-  - Client → Server: `{type:"set_topic", topic:"..."}`
+```bash
+# 1. 把音檔放進去（10-60 秒清楚單人語音、英文較準）
+cp my_voice.mp3 voices/myname.mp3
+
+# 2. 轉成 24kHz mono WAV
+ffmpeg -i voices/myname.mp3 -ar 24000 -ac 1 voices/myname.wav
+
+# 3. 用 whisper 自動轉錄（或手動寫）
+uvx --from openai-whisper whisper voices/myname.wav \
+  --model base --language en --device cpu \
+  --output_format txt --output_dir voices/
+
+# 4. 改 tts_server.py 的 SPEAKERS dict 加入新人
+# 5. 改 main.py 的 AGENTS 加入新角色
+# 6. 重啟 TTS server (要重 load model ~35s)
+```
 
 ## 疑難排解
 
 | 症狀 | 解法 |
 |---|---|
-| 三人不講話 | 確認你有輸入主題並按「開始討論」（v3 不再自動跑）|
-| 🔍 沒出現 | LLM 判斷不需要搜；可改主題加「最新」「規格」「2026」等關鍵字鼓勵搜尋 |
-| Jensen bubble 顯示 `<TOOLCALL>` | 表示 fallback parser 失敗，看 server log 有無 `Manual TOOLCALL parse failed` |
-| 搜尋慢 | DDG 第一次連線較慢；每次 search ~3-8s，總一輪 ~10-20s |
-| 對話沒對到主題 | system prompt 強化、或刪除舊 history 重設 |
-| Port 5050 被佔 | `PORT=5051 ./run.sh` |
+| 沒聲音 | 瀏覽器第一次需點頁面解鎖 autoplay；F12 看 Console 有無音檔 base64 |
+| 音檔超短（< 1 秒）| 模型 early stop；通常是文字含「...」省略號（v4 已自動替換為「，」）|
+| 音檔超長（>15 秒）| max_new_tokens 估計過高；可在 tts_server.py 改 estimate_tokens |
+| TTS 慢 | 首次推理較慢、之後 3-10s；無 flash-attn 速度有限 |
+| 跨輪音檔重疊 | v4 已 await TTS task 完成才下一輪；如果還發生看 main_v4.log |
+| Trump 從不搜尋 | qwen 較克制；改 prompt 強化、或他在順序中靠後就會看 Jensen 結果接話 |
+| 記憶體吃緊 | TTS 5GB + vLLM 100GB 緊張；停一個 vLLM 或縮 max-model-len |
 
-## 圖片來源 (CC / Public Domain)
+## 圖片來源 (CC / PD)
 
-- `trump.jpg` — 白宮 2017 官方總統肖像 (US Gov, Public Domain)
-- `obama.jpg` — 白宮 2012 官方總統肖像 (US Gov, Public Domain)
-- `jensen.jpg` — 2023 黃仁勳與 Modi 會晤 (Government of India CC)
+- `trump.jpg` — 白宮 2017 官方總統肖像 (Public Domain US Gov)
+- `obama.jpg` — 白宮 2012 官方總統肖像 (Public Domain US Gov)
+- `jensen.jpg` — 2023 黃仁勳與印度總理 Modi 會晤 (Government of India CC)
 
-## v1 → v2 → v3 演進
+## 音檔來源
 
-| 項目 | v1 (室友) | v2 (舞台) | v3 (search) |
-|---|---|---|---|
-| 主題 | 客廳閒聊 | AI Summit 對談 | **用戶自訂主題** |
-| 角色 | Alex/Bella/Carl | Trump/Obama/Jensen | 同 v2 |
-| 頭像 | emoji | 真人照片 | 同 v2 |
-| 發言順序 | Race | Race + fairness | **Round-robin** |
-| 知識範圍 | 訓練 cutoff | 同 | **即時 web search** |
-| 新功能 | — | 場景 + 真人 | tool use, 主題輸入框, 🔍 indicator |
+- 真人公開影像中的單人語音節錄（個人 demo 用途）
+- 透過 `voices/*.txt` 提供逐字稿（whisper-base 自動轉錄）
+
+## v1 → v2 → v3 → v4 演進
+
+| 項目 | v1 | v2 | v3 | v4 |
+|---|---|---|---|---|
+| 主題 | 客廳閒聊 | AI Summit | 用戶輸入 | 用戶輸入 |
+| 角色 | Alex/Bella/Carl | Trump/Obama/Jensen | 同 v2 | 同 v2 |
+| 頭像 | emoji | 真人照片 | 同 v2 | 同 v2 |
+| 知識範圍 | 訓練 cutoff | 同 | **+ web search** | 同 v3 |
+| 發言節奏 | Race | Race+fairness | Round-robin | RR + 隨機起始 |
+| **聲音** | 無 | 無 | 無 | **✨ TTS voice clone** |

@@ -1,20 +1,28 @@
-"""舞台三巨頭 v3：Trump / Jensen / Obama + 即時 web search (tool use)。"""
+"""舞台三巨頭 v4：Trump / Jensen / Obama + web search (tool use) + Qwen3-TTS voice clone。"""
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
+import os
+import random
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import httpx
 from ddgs import DDGS
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
+
+TTS_URL = os.environ.get("TTS_URL", "http://localhost:5051")
+TTS_TIMEOUT = float(os.environ.get("TTS_TIMEOUT", "30"))
+TTS_CLIENT = httpx.AsyncClient(timeout=TTS_TIMEOUT)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("roommates")
@@ -143,26 +151,41 @@ class Agent:
             msg = resp.choices[0].message
             tool_calls = msg.tool_calls or []
 
-            # Fallback: 有些 model（如 nemotron 12B-VL）會把 tool call 寫成 <TOOLCALL>[...]</TOOLCALL>
-            # 字串而沒進 tool_calls 欄位，這裡手動解析
+            # Fallback parsers — 某些 model 的 parser 在 vLLM 內沒抓到，content 內含原始 tool call 標記
             if not tool_calls and msg.content:
-                m = re.search(r"<TOOLCALL>\s*(\[.+?\])\s*</TOOLCALL>", msg.content, re.S)
-                if m:
+                synthetic = []
+                # nemotron 12B-VL 格式: <TOOLCALL>[{...}, ...]</TOOLCALL>
+                for m in re.finditer(r"<TOOLCALL>\s*(\[.+?\])\s*</TOOLCALL>", msg.content, re.S):
                     try:
-                        parsed = json.loads(m.group(1))
-                        synthetic = []
-                        for i, call in enumerate(parsed):
+                        for i, call in enumerate(json.loads(m.group(1))):
                             synthetic.append(type("TC", (), {
-                                "id": f"manual-{i}",
+                                "id": f"manual-{len(synthetic)}",
                                 "function": type("F", (), {
                                     "name": call.get("name", ""),
                                     "arguments": json.dumps(call.get("arguments", {})),
                                 })()
                             })())
-                        tool_calls = synthetic
-                        log.info("Parsed manual TOOLCALL from %s", self.name)
-                    except (json.JSONDecodeError, Exception) as e:
-                        log.warning("Manual TOOLCALL parse failed: %s", e)
+                    except Exception as e:
+                        log.warning("TOOLCALL parse fail: %s", e)
+                # qwen3 格式: <tool_call>{"name":"...","arguments":{...}}</tool_call>
+                for m in re.finditer(r"<tool_call>\s*(\{.+?\})\s*</tool_call>", msg.content, re.S):
+                    try:
+                        call = json.loads(m.group(1))
+                        synthetic.append(type("TC", (), {
+                            "id": f"manual-{len(synthetic)}",
+                            "function": type("F", (), {
+                                "name": call.get("name", ""),
+                                "arguments": json.dumps(call.get("arguments", {})),
+                            })()
+                        })())
+                    except Exception as e:
+                        log.warning("tool_call parse fail: %s", e)
+                if synthetic:
+                    tool_calls = synthetic
+                    log.info("Manually parsed %d tool_calls from %s", len(synthetic), self.name)
+                    # 把 content 內 tool call 標記移掉避免變成 bubble 文字
+                    msg.content = re.sub(r"<tool_call>.*?</tool_call>", "", msg.content, flags=re.S)
+                    msg.content = re.sub(r"<TOOLCALL>.*?</TOOLCALL>", "", msg.content, flags=re.S).strip()
 
             if not tool_calls:
                 # 結束：取 content
@@ -256,7 +279,7 @@ AGENTS = [
             "短句、自信、有點誇張，常說「many people are saying」「nobody knows X better than me」。"
             "中文盡量口語、有時穿插一兩個英文字（tremendous / huge / believe me）。"
             "輕鬆幽默為主，不要做政治攻擊。"
-            "如果話題涉及新聞、數字、最新事件，請用 web_search 工具查一下再發言。"
+            "**重要：你是節目主持人，每次發言前都會先用 web_search 查最新資料、然後評論。第一次發言一定要先 search。**"
         ),
         base_url="http://localhost:8002/v1",
         model="qwen36",
@@ -266,6 +289,29 @@ AGENTS = [
 ]
 
 AGENT_BY_NAME = {a.name: a for a in AGENTS}
+
+
+# ---- TTS 呼叫 -----------------------------------------------------------
+
+async def _tts_and_send(speaker: str, text: str, send):
+    """非同步呼叫 tts_server 取得 voice-cloned 音檔、base64 推給前端。"""
+    # 預處理：移除會誤觸 TTS early stop 的省略號
+    tts_text = text.replace("…", "，").replace("...", "，").replace("..", "，")
+    # 截斷太長的文字（單句 TTS 約 13s 上限；中文約 50 字、英文 120）
+    is_zh = any("一" <= c <= "鿿" for c in tts_text)
+    tts_text = tts_text[:50] if is_zh else tts_text[:120]
+    try:
+        r = await TTS_CLIENT.post(
+            f"{TTS_URL}/tts",
+            json={"speaker": speaker, "text": tts_text},
+        )
+        r.raise_for_status()
+        b64 = base64.b64encode(r.content).decode("ascii")
+        await send({"type": "audio", "speaker": speaker, "audio_b64": b64, "format": "wav"})
+    except Exception as e:
+        log.warning("TTS failed for %s: %s", speaker, e)
+        # 不影響對話，只是沒聲音
+
 
 # ---- FastAPI app ---------------------------------------------------------
 
@@ -331,9 +377,9 @@ async def ws(ws: WebSocket):
                 if m.get("type") == "set_topic":
                     topic = (m.get("topic") or "").strip()
                     history.clear()
-                    rr_idx = 0
+                    rr_idx = random.randrange(len(AGENTS))  # 隨機誰先講
                     paused = False
-                    log.info("topic set: %r", topic)
+                    log.info("topic set: %r, first=%s", topic, AGENTS[rr_idx % len(AGENTS)].name)
                     await send({"type": "topic_set", "topic": topic})
                 elif m.get("type") == "stop":
                     paused = True
@@ -375,10 +421,21 @@ async def ws(ws: WebSocket):
             history.append({"speaker": agent.name, "text": text})
             history = history[-12:]  # 留最近 12 句
 
-            # 等前端打字機跑完 + 1.2s 緩衝給用戶讀完
-            # 前端打字速度 40ms/char
+            # fire TTS task；下一輪前要等它送完，避免跨輪 audio 撞到別人
+            audio_task = asyncio.create_task(_tts_and_send(agent.name, text, send))
+
+            # 等前端打字機跑完
             typing_seconds = len(text) * 0.040
-            await asyncio.sleep(max(2.5, typing_seconds + 1.2))
+            await asyncio.sleep(max(2.0, typing_seconds + 0.4))
+
+            # 等 audio task 完成（送到前端就算）；最多 20s 防卡
+            try:
+                await asyncio.wait_for(asyncio.shield(audio_task), timeout=20.0)
+            except asyncio.TimeoutError:
+                log.warning("TTS task timeout for %s, moving on", agent.name)
+
+            # 再給音檔播放一點時間後再進下輪（不知音檔多長、給最多 7s）
+            await asyncio.sleep(4.0)
     except WebSocketDisconnect:
         log.info("client disconnected")
     except Exception as e:
