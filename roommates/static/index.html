@@ -349,6 +349,16 @@
     font-family: inherit;
   }
   .topic-bar input:focus { outline: 2px solid #f4d35e; }
+  .topic-bar select {
+    padding: 9px 10px;
+    border-radius: 8px;
+    border: 1px solid #3a3a4a;
+    background: #0a0a14;
+    color: #f4d35e;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
   .topic-bar button {
     padding: 10px 20px;
     border-radius: 8px;
@@ -414,7 +424,11 @@
 </header>
 
 <div class="topic-bar">
-  <input id="topic-input" placeholder="輸入今日論壇主題（例：DeepSeek V4 為什麼這麼強？ / Llama 5 最新進展 / NVIDIA Rubin 規格）" autocomplete="off"/>
+  <input id="topic-input" placeholder="輸入今日論壇主題（例：NVIDIA Rubin specs / Llama 5 release date / DeepSeek V4）" autocomplete="off"/>
+  <select id="lang-select" title="講者使用語言（英文 voice clone 較像本人）">
+    <option value="en" selected>🌐 English</option>
+    <option value="zh">🈶 中文</option>
+  </select>
   <button id="topic-btn">開始討論</button>
   <button id="stop-btn" class="stop-btn">⏹ 停止</button>
   <span id="topic-current"></span>
@@ -631,7 +645,8 @@ const stopBtn = document.getElementById("stop-btn");
 function submitTopic() {
   const t = topicInput.value.trim();
   if (!t || !ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({type: "set_topic", topic: t}));
+  const lang = document.getElementById("lang-select").value;
+  ws.send(JSON.stringify({type: "set_topic", topic: t, language: lang}));
 }
 function stopChat() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;

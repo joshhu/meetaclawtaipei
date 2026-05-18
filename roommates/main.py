@@ -76,12 +76,17 @@ async def web_search(query: str, max_results: int = 5) -> str:
 
 # ---- agent 設定 ----------------------------------------------------------
 
-STAGE_INTRO = (
+STAGE_INTRO_ZH = (
     "現在是 2026 年「AI Summit 台北」的開幕論壇，三位重量級講者同台對談。"
     "請完全以你的人物口吻發言，模仿那個人公開的講話風格。"
 )
+STAGE_INTRO_EN = (
+    "You are on stage at a 2026 AI Summit opening panel with two other heavyweight speakers. "
+    "Speak exactly in your persona's well-known public speaking style. "
+    "**All speakers communicate in English.** Audience is global."
+)
 
-COMMON_RULES = (
+COMMON_RULES_ZH = (
     "重要規則：\n"
     "1. 每次只說 1-2 句、最多 60 個中文字（短而有力的金句最讚）\n"
     "2. 用繁體中文（如果是 Trump 可以混一兩個簡單英文字）\n"
@@ -90,12 +95,20 @@ COMMON_RULES = (
     "5. 不要每次自我介紹\n"
     "6. 內容輕鬆幽默，不要碰敏感政治攻擊\n"
 )
+COMMON_RULES_EN = (
+    "IMPORTANT RULES:\n"
+    "1. Reply with ONLY 1-2 short punchy sentences, max 25 words.\n"
+    "2. **Use English only — no Chinese characters whatsoever.**\n"
+    "3. No bullet points, no markdown, no emoji, no stage directions.\n"
+    "4. Respond to what the previous speaker just said (echo, add, or push back).\n"
+    "5. Don't re-introduce yourself.\n"
+    "6. Keep it playful, no political attacks.\n"
+)
 
 SEARCH_GUIDE = (
-    "你有 web_search 工具可以即時上網。\n"
-    "**重要：當話題涉及任何具體事實、產品、人物、新聞、最新進展、規格、數字時，"
-    "你應該優先呼叫 web_search 拿到第一手資料再發言**，不要靠記憶猜測。\n"
-    "搜尋 query 用英文（結果較豐富），第一次發言時幾乎都該搜尋。"
+    "You have a web_search tool. When the topic involves facts, products, people, "
+    "news, specs, or numbers, call web_search first to get fresh data. "
+    "Use English queries for best results."
 )
 
 
@@ -103,40 +116,62 @@ SEARCH_GUIDE = (
 class Agent:
     name: str
     emoji: str
-    role: str
+    role: str                       # English role (default)
     base_url: str
     model: str
+    role_zh: str = ""               # 中文版 role（沒有就用 role）
     avatar: str = ""
     can_search: bool = False        # 是否帶 tools 參數
+    max_response_tokens: int = 200  # 模型生成上限（短回應）
+    max_response_chars: int = 200   # 後處理上限（更短）
     extra: dict = field(default_factory=dict)
 
     def __post_init__(self):
         self.client = AsyncOpenAI(base_url=self.base_url, api_key="not-needed", timeout=120.0)
 
-    def system_prompt(self) -> str:
+    def system_prompt(self, language: str = "zh") -> str:
         others = [a.name for a in AGENTS if a.name != self.name]
-        parts = [
-            f"你是 {self.name}。{self.role}",
-            STAGE_INTRO,
-            f"同台的另外兩位是 {' 和 '.join(others)}。",
-            COMMON_RULES,
-        ]
+        if language == "en":
+            parts = [
+                self.role,
+                STAGE_INTRO_EN,
+                f"The other two speakers are {' and '.join(others)}.",
+                COMMON_RULES_EN,
+            ]
+        else:
+            role_zh = self.role_zh or self.role
+            parts = [
+                role_zh,
+                STAGE_INTRO_ZH,
+                f"同台的另外兩位是 {' 和 '.join(others)}。",
+                COMMON_RULES_ZH,
+            ]
         if self.can_search:
             parts.append(SEARCH_GUIDE)
         return "\n\n".join(parts)
 
-    async def speak(self, history: list[dict], topic: str, on_event) -> str:
+    async def speak(self, history: list[dict], topic: str, on_event, language: str = "zh") -> str:
         """tool loop。on_event(dict) 是 callback 用來推 WS 訊息。"""
-        msgs: list[dict] = [{"role": "system", "content": self.system_prompt()}]
+        log.info("speak(): name=%s language=%r", self.name, language)
+        msgs: list[dict] = [{"role": "system", "content": self.system_prompt(language)}]
         if topic:
-            msgs.append({"role": "user", "content": f"今天的論壇主題是：{topic}"})
+            if language == "en":
+                msgs.append({"role": "user", "content": f"Today's panel topic: {topic}"})
+            else:
+                msgs.append({"role": "user", "content": f"今天的論壇主題是：{topic}"})
         for h in history:
-            msgs.append({"role": "user", "content": f"[{h['speaker']}]：{h['text']}"})
-        msgs.append({"role": "user", "content": f"輪到你（{self.name}）發言。"})
+            sep = ":" if language == "en" else "："
+            msgs.append({"role": "user", "content": f"[{h['speaker']}]{sep}{h['text']}"})
+        if language == "en":
+            msgs.append({"role": "user", "content":
+                f"Your turn, {self.name}. Reply with 1-2 short English sentences only "
+                f"(max 25 words). Do not use any Chinese characters at all."})
+        else:
+            msgs.append({"role": "user", "content": f"輪到你（{self.name}）發言。"})
 
         kwargs = dict(
             model=self.model,
-            max_tokens=400,
+            max_tokens=self.max_response_tokens,
             temperature=0.85,
             top_p=0.9,
         )
@@ -192,7 +227,27 @@ class Agent:
                 text = (msg.content or "").strip()
                 if not text and hasattr(msg, "reasoning") and msg.reasoning:
                     text = msg.reasoning.strip().split("\n")[-1][:200]
-                return self._clean(text)
+                cleaned = self._clean(text)
+                # 英文模式但回了中文 → 再生一次，更強的英文強制
+                if language == "en" and any("一" <= c <= "鿿" for c in cleaned):
+                    log.info("English mode but %s returned Chinese, retrying with stronger prompt", self.name)
+                    retry_msgs = msgs + [
+                        {"role": "assistant", "content": cleaned},
+                        {"role": "user", "content":
+                            "That was Chinese. Translate your previous response to short English only "
+                            "(1-2 sentences, max 25 words). NO Chinese."},
+                    ]
+                    retry_kwargs = {k: v for k, v in kwargs.items() if k != "tools" and k != "tool_choice"}
+                    try:
+                        resp2 = await self.client.chat.completions.create(
+                            messages=retry_msgs, **retry_kwargs,
+                        )
+                        retried = (resp2.choices[0].message.content or "").strip()
+                        if retried:
+                            cleaned = self._clean(retried)
+                    except Exception as e:
+                        log.warning("English retry failed: %s", e)
+                return cleaned
 
             # 有 tool calls — 把 assistant 的 tool_call 加進 messages，再執行每個 tool
             msgs.append({
@@ -231,12 +286,36 @@ class Agent:
         return self._clean(resp.choices[0].message.content or "（沒話說）")
 
     def _clean(self, text: str) -> str:
-        text = (text or "").replace("\n", " ").strip()
+        text = text or ""
+        # 移除我們 prefill 的英文前綴
+        text = re.sub(r"^\s*\(?\s*In English\s*\)?\s*[:：]?\s*", "", text)
+        # 強力清理：未閉合 / 多餘的 tool call 標記（qwen3, hermes, nemotron, llama 各種變體）
+        text = re.sub(r"<tool_call>.*?(?:</tool_call>|$)", "", text, flags=re.S | re.I)
+        text = re.sub(r"<TOOLCALL>.*?(?:</TOOLCALL>|$)", "", text, flags=re.S | re.I)
+        text = re.sub(r"<function_call>.*?(?:</function_call>|$)", "", text, flags=re.S | re.I)
+        text = re.sub(r"<function>.*?(?:</function>|$)", "", text, flags=re.S | re.I)
+        # 偶爾 model 輸出 markdown code fence 含 json
+        text = re.sub(r"```(?:json|tool_code)?\s*\{.*?\}\s*```", "", text, flags=re.S)
+        text = text.replace("\n", " ").strip()
         if not text:
             return "（沒話說）"
         for prefix in (f"[{self.name}]：", f"[{self.name}]:", f"{self.name}：", f"{self.name}:"):
             if text.startswith(prefix):
                 text = text[len(prefix):].strip()
+
+        # 如果超過 max_response_chars，裁到最近的句末標點
+        if len(text) > self.max_response_chars:
+            cut = text[:self.max_response_chars]
+            # 找最後一個句末標點（中英）
+            best = -1
+            for ch in (". ", "! ", "? ", "。", "！", "？"):
+                idx = cut.rfind(ch)
+                if idx > best:
+                    best = idx + len(ch) - 1
+            if best > self.max_response_chars * 0.5:
+                text = cut[:best + 1].strip()
+            else:
+                text = cut.strip() + "…"
         return text
 
 
@@ -246,10 +325,15 @@ AGENTS = [
         emoji="🇺🇸",
         avatar="obama.jpg",
         role=(
-            "你是前美國總統 Barack Obama。講話風格沉穩有節奏、會用「我們」拉近距離，"
-            "喜歡引用希望與團結的概念，常用「Let me be clear」或「讓我這樣說」開頭。"
-            "句子要有抑揚頓挫，偶爾用一個短停頓（...）。中文以正式而溫暖的口吻。"
-            "你**不**自己上網搜尋，而是根據其他兩位剛才提到的資訊做平衡評論。"
+            "You are former US President Barack Obama. Measured, oratorical, "
+            "uses 'we' to connect. Often opens with 'Let me be clear' or 'Look,'. "
+            "Themes of hope and unity. Brief reflective pauses (...). "
+            "You do NOT search the web yourself — you comment on what the other two have found."
+        ),
+        role_zh=(
+            "你是前美國總統 Barack Obama。沉穩有節奏、用「我們」拉近距離，"
+            "常用「讓我這樣說」開頭。句子有抑揚頓挫、偶爾停頓（...）。"
+            "你不自己上網搜尋，而是根據另兩人找到的資料做平衡評論。"
         ),
         base_url="http://localhost:8001/v1",
         model="gemma4",
@@ -260,26 +344,37 @@ AGENTS = [
         emoji="🧥",
         avatar="jensen.jpg",
         role=(
-            "你是 NVIDIA CEO 黃仁勳。台裔美國人、招牌黑皮衣。"
-            "講話會大量使用 AI、GPU、CUDA、Blackwell、加速運算、AI 工廠 等技術詞，"
-            "語氣興奮、對未來樂觀，偶爾混一兩個英文。"
-            "**必須用繁體中文，絕對不要簡體字（不能寫「当然/单/广/会」要寫「當然/單/廣/會」）。**"
-            "如果話題與技術/產業有關，請積極使用 web_search 抓最新資料佐證。"
+            "You are NVIDIA CEO Jensen Huang. Tech vocab: AI, GPU, CUDA, Blackwell, AI factory. "
+            "**MANDATORY: every turn first call web_search to fetch real data, then reply.** "
+            "After tool result: ONE short sentence, max 20 words."
+        ),
+        role_zh=(
+            "你是 NVIDIA CEO 黃仁勳。常用 AI、GPU、Blackwell、AI 工廠 等詞。"
+            "**每次發言必須先用 web_search 查資料，再回答。**"
+            "拿到資料後回應一句、最多 30 個中文字。**必須繁體中文。**"
         ),
         base_url="http://localhost:8003/v1",
         model="nemotron",
         can_search=True,
+        max_response_tokens=300,    # 留空間給 tool call + 最終回應
+        max_response_chars=120,     # 後處理仍限短
     ),
     Agent(
         name="Trump",
         emoji="🇺🇸",
         avatar="trump.jpg",
         role=(
-            "你是前美國總統 Donald Trump。講話風格直接、用詞簡單、愛用最高級「最棒的」「前所未有」「相信我」。"
-            "短句、自信、有點誇張，常說「many people are saying」「nobody knows X better than me」。"
-            "中文盡量口語、有時穿插一兩個英文字（tremendous / huge / believe me）。"
-            "輕鬆幽默為主，不要做政治攻擊。"
-            "**重要：你是節目主持人，每次發言前都會先用 web_search 查最新資料、然後評論。第一次發言一定要先 search。**"
+            "You are former US President Donald Trump. Direct, simple words, lots of superlatives: "
+            "'tremendous', 'huge', 'the best', 'believe me', 'many people are saying', "
+            "'nobody knows X better than me'. Short punchy sentences, brash confidence. "
+            "Keep it playful — no political attacks. Use web_search before answering "
+            "topics involving facts, news, numbers."
+        ),
+        role_zh=(
+            "你是前美國總統 Donald Trump。直白、用詞簡單、愛用最高級「最棒的」「前所未有」「相信我」。"
+            "短句、自信，常說「many people are saying」「nobody knows X better than me」。"
+            "中文穿插一兩個英文字（tremendous / huge / believe me）。輕鬆幽默、不政治攻擊。"
+            "話題涉及新聞、數字、時事請先用 web_search 查資料。"
         ),
         base_url="http://localhost:8002/v1",
         model="qwen36",
@@ -293,8 +388,11 @@ AGENT_BY_NAME = {a.name: a for a in AGENTS}
 
 # ---- TTS 呼叫 -----------------------------------------------------------
 
-async def _tts_and_send(speaker: str, text: str, send):
-    """非同步呼叫 tts_server 取得 voice-cloned 音檔、base64 推給前端。"""
+async def _tts_and_send(speaker: str, text: str, send) -> float:
+    """非同步呼叫 tts_server 取得 voice-cloned 音檔、base64 推給前端。
+
+    Returns: audio duration in seconds (0 if failed).
+    """
     # 預處理：移除會誤觸 TTS early stop 的省略號
     tts_text = text.replace("…", "，").replace("...", "，").replace("..", "，")
     # 截斷太長的文字（單句 TTS 約 13s 上限；中文約 50 字、英文 120）
@@ -306,11 +404,21 @@ async def _tts_and_send(speaker: str, text: str, send):
             json={"speaker": speaker, "text": tts_text},
         )
         r.raise_for_status()
-        b64 = base64.b64encode(r.content).decode("ascii")
-        await send({"type": "audio", "speaker": speaker, "audio_b64": b64, "format": "wav"})
+        audio_bytes = r.content
+        # WAV 24kHz 16-bit mono ≈ 48000 bytes/sec；扣 44 bytes header
+        duration_s = max(0.0, (len(audio_bytes) - 44) / 48000.0)
+        b64 = base64.b64encode(audio_bytes).decode("ascii")
+        await send({
+            "type": "audio",
+            "speaker": speaker,
+            "audio_b64": b64,
+            "format": "wav",
+            "duration_s": duration_s,
+        })
+        return duration_s
     except Exception as e:
         log.warning("TTS failed for %s: %s", speaker, e)
-        # 不影響對話，只是沒聲音
+        return 0.0
 
 
 # ---- FastAPI app ---------------------------------------------------------
@@ -350,6 +458,7 @@ async def ws(ws: WebSocket):
 
     history: list[dict] = []
     topic: str = ""
+    language: str = "zh"  # "zh" 或 "en"
     rr_idx: int = 0  # round-robin index
     paused: bool = True  # 等用戶設 topic 才開始
 
@@ -366,7 +475,7 @@ async def ws(ws: WebSocket):
 
     # 接收用戶 set_topic 的背景 task
     async def listen_client():
-        nonlocal topic, history, rr_idx, paused
+        nonlocal topic, language, history, rr_idx, paused
         try:
             while True:
                 raw = await ws.receive_text()
@@ -376,11 +485,15 @@ async def ws(ws: WebSocket):
                     continue
                 if m.get("type") == "set_topic":
                     topic = (m.get("topic") or "").strip()
+                    new_lang = m.get("language", "zh")
+                    if new_lang in ("zh", "en"):
+                        language = new_lang
                     history.clear()
-                    rr_idx = random.randrange(len(AGENTS))  # 隨機誰先講
+                    rr_idx = random.randrange(len(AGENTS))
                     paused = False
-                    log.info("topic set: %r, first=%s", topic, AGENTS[rr_idx % len(AGENTS)].name)
-                    await send({"type": "topic_set", "topic": topic})
+                    log.info("topic set: %r, lang=%s, first=%s",
+                             topic, language, AGENTS[rr_idx % len(AGENTS)].name)
+                    await send({"type": "topic_set", "topic": topic, "language": language})
                 elif m.get("type") == "stop":
                     paused = True
                     log.info("stopped by user")
@@ -403,7 +516,7 @@ async def ws(ws: WebSocket):
 
             start = time.monotonic()
             try:
-                text = await agent.speak(history, topic, send)
+                text = await agent.speak(history, topic, send, language)
             except Exception as e:
                 log.exception("speak error: %s", e)
                 await send({"type": "error", "message": f"{agent.name}: {str(e)[:200]}"})
@@ -421,21 +534,23 @@ async def ws(ws: WebSocket):
             history.append({"speaker": agent.name, "text": text})
             history = history[-12:]  # 留最近 12 句
 
-            # fire TTS task；下一輪前要等它送完，避免跨輪 audio 撞到別人
+            # fire TTS task；下一輪前要等它送完 + 音檔播完，避免跨輪撞音檔
             audio_task = asyncio.create_task(_tts_and_send(agent.name, text, send))
 
             # 等前端打字機跑完
             typing_seconds = len(text) * 0.040
-            await asyncio.sleep(max(2.0, typing_seconds + 0.4))
+            await asyncio.sleep(max(1.5, typing_seconds + 0.2))
 
-            # 等 audio task 完成（送到前端就算）；最多 20s 防卡
+            # 等 audio task 完成（拿到 audio duration）；最多 25s 防卡
+            audio_duration = 0.0
             try:
-                await asyncio.wait_for(asyncio.shield(audio_task), timeout=20.0)
+                audio_duration = await asyncio.wait_for(asyncio.shield(audio_task), timeout=25.0)
             except asyncio.TimeoutError:
                 log.warning("TTS task timeout for %s, moving on", agent.name)
 
-            # 再給音檔播放一點時間後再進下輪（不知音檔多長、給最多 7s）
-            await asyncio.sleep(4.0)
+            # 音檔已開始在前端播，等播完 + 1 秒緩衝再下一輪
+            # (audio_duration 是音檔本身長度；前端收到後幾乎即時播)
+            await asyncio.sleep(audio_duration + 1.2)
     except WebSocketDisconnect:
         log.info("client disconnected")
     except Exception as e:
