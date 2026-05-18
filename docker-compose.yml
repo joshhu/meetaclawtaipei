@@ -62,23 +62,28 @@ services:
     network_mode: host
     volumes:
       - /home/joshhu/.cache/huggingface:/root/.cache/huggingface
+      - /home/joshhu/workspace/meetaclawtaipei/nano_v3_reasoning_parser.py:/opt/parsers/nano_v3_reasoning_parser.py:ro
     environment:
       - HF_HUB_OFFLINE=0
       - NVIDIA_VISIBLE_DEVICES=all
+      - VLLM_USE_FLASHINFER_MOE_FP4=1
+      - VLLM_FLASHINFER_MOE_BACKEND=throughput
     command:
       - vllm
       - serve
-      - nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8
+      - nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4
       - --port=8003
       - --host=0.0.0.0
       - --served-model-name=nemotron
-      - --gpu-memory-utilization=0.20
+      - --gpu-memory-utilization=0.30
       - --max-model-len=8192
       - --max-num-seqs=4
       - --max-num-batched-tokens=4096
       - --kv-cache-dtype=fp8
       - --enable-auto-tool-choice
       - --tool-call-parser=pythonic
+      - --reasoning-parser-plugin=/opt/parsers/nano_v3_reasoning_parser.py
+      - --reasoning-parser=nano_v3
       - --trust-remote-code
     restart: "no"
 

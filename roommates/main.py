@@ -111,6 +111,32 @@ SEARCH_GUIDE = (
     "Use English queries for best results."
 )
 
+# 每輪隨機塞一個 mood/angle 給 model，逼出不同回應
+MOODS_EN = [
+    "Be skeptical and push back.",
+    "Be enthusiastic and amplify the point.",
+    "Tell a quick anecdote (1 line).",
+    "Drop a sharp one-liner.",
+    "Disagree with the previous speaker.",
+    "Build on what was just said with a fresh angle.",
+    "Be witty / make a joke.",
+    "Mention a specific number or fact you know.",
+    "Ask a rhetorical question.",
+    "Make a bold prediction.",
+]
+MOODS_ZH = [
+    "保持懷疑、反駁一下。",
+    "熱情地放大這個觀點。",
+    "講個一句話的小故事。",
+    "丟一句很尖銳的話。",
+    "不同意上一位的說法。",
+    "從新的角度延伸剛才的話題。",
+    "幽默一點、開個玩笑。",
+    "提一個具體數字或事實。",
+    "問一個反問句。",
+    "做一個大膽預測。",
+]
+
 
 @dataclass
 class Agent:
@@ -162,18 +188,29 @@ class Agent:
         for h in history:
             sep = ":" if language == "en" else "："
             msgs.append({"role": "user", "content": f"[{h['speaker']}]{sep}{h['text']}"})
+        # mood 不直接寫在 user prompt（會被重複念出），改用 system 風格暗示
         if language == "en":
+            mood = random.choice(MOODS_EN)
+            msgs.append({"role": "system", "content":
+                f"Style hint for this turn: {mood} Vary your phrasing from previous turns."})
             msgs.append({"role": "user", "content":
-                f"Your turn, {self.name}. Reply with 1-2 short English sentences only "
-                f"(max 25 words). Do not use any Chinese characters at all."})
+                f"Your turn, {self.name}. Reply ONLY with 1-2 short English sentences "
+                f"(max 25 words). Just speak — do not narrate your thinking or repeat the instructions. "
+                f"No Chinese characters."})
         else:
-            msgs.append({"role": "user", "content": f"輪到你（{self.name}）發言。"})
+            mood = random.choice(MOODS_ZH)
+            msgs.append({"role": "system", "content":
+                f"本輪風格提示：{mood} 變換語氣別重複先前的開頭。"})
+            msgs.append({"role": "user", "content":
+                f"輪到你（{self.name}）發言。直接講、不要重複指令或描述你要怎麼做。"})
 
         kwargs = dict(
             model=self.model,
             max_tokens=self.max_response_tokens,
-            temperature=0.85,
-            top_p=0.9,
+            temperature=1.1,             # 多樣性提高
+            top_p=0.95,
+            presence_penalty=0.4,        # 鼓勵新詞彙
+            frequency_penalty=0.5,       # 壓抑重複用字
         )
         if self.can_search:
             kwargs["tools"] = [SEARCH_TOOL]
@@ -215,12 +252,43 @@ class Agent:
                         })())
                     except Exception as e:
                         log.warning("tool_call parse fail: %s", e)
+                # Nemotron 3 hermes-XML 格式: <tool_call><function=NAME><parameter=KEY>VAL</parameter>...</function></tool_call>
+                for m in re.finditer(
+                    r"<tool_call>\s*<function=(\w+)>(.*?)</function>\s*</tool_call>",
+                    msg.content, re.S,
+                ):
+                    fn_name = m.group(1)
+                    args = {}
+                    for p in re.finditer(r"<parameter=(\w+)>\s*(.*?)\s*</parameter>", m.group(2), re.S):
+                        args[p.group(1)] = p.group(2).strip()
+                    synthetic.append(type("TC", (), {
+                        "id": f"manual-{len(synthetic)}",
+                        "function": type("F", (), {
+                            "name": fn_name,
+                            "arguments": json.dumps(args),
+                        })()
+                    })())
+                # Nemotron 30B 偶爾用 pythonic 裸 call: web_search("query")
+                if not synthetic:
+                    for m in re.finditer(r'(\w+)\(\s*"([^"]+)"\s*\)', msg.content):
+                        fn_name = m.group(1)
+                        if fn_name == "web_search":
+                            synthetic.append(type("TC", (), {
+                                "id": f"manual-{len(synthetic)}",
+                                "function": type("F", (), {
+                                    "name": fn_name,
+                                    "arguments": json.dumps({"query": m.group(2)}),
+                                })()
+                            })())
+                            break  # 只抓第一個避免重複
                 if synthetic:
                     tool_calls = synthetic
                     log.info("Manually parsed %d tool_calls from %s", len(synthetic), self.name)
                     # 把 content 內 tool call 標記移掉避免變成 bubble 文字
                     msg.content = re.sub(r"<tool_call>.*?</tool_call>", "", msg.content, flags=re.S)
-                    msg.content = re.sub(r"<TOOLCALL>.*?</TOOLCALL>", "", msg.content, flags=re.S).strip()
+                    msg.content = re.sub(r"<TOOLCALL>.*?</TOOLCALL>", "", msg.content, flags=re.S)
+                    msg.content = re.sub(r'web_search\(\s*"[^"]+"\s*\)', "", msg.content)
+                    msg.content = re.sub(r'Web Search Result:[^\n]*', "", msg.content).strip()
 
             if not tool_calls:
                 # 結束：取 content
@@ -358,6 +426,7 @@ AGENTS = [
         can_search=True,
         max_response_tokens=300,    # 留空間給 tool call + 最終回應
         max_response_chars=120,     # 後處理仍限短
+        extra={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
     ),
     Agent(
         name="Trump",
@@ -459,7 +528,7 @@ async def ws(ws: WebSocket):
     history: list[dict] = []
     topic: str = ""
     language: str = "zh"  # "zh" 或 "en"
-    rr_idx: int = 0  # round-robin index
+    last_speaker: str | None = None  # 上一個發言者（避免連兩次）
     paused: bool = True  # 等用戶設 topic 才開始
 
     async def send(payload: dict):
@@ -475,7 +544,7 @@ async def ws(ws: WebSocket):
 
     # 接收用戶 set_topic 的背景 task
     async def listen_client():
-        nonlocal topic, language, history, rr_idx, paused
+        nonlocal topic, language, history, last_speaker, paused
         try:
             while True:
                 raw = await ws.receive_text()
@@ -489,10 +558,9 @@ async def ws(ws: WebSocket):
                     if new_lang in ("zh", "en"):
                         language = new_lang
                     history.clear()
-                    rr_idx = random.randrange(len(AGENTS))
+                    last_speaker = None  # 重設、第一輪所有人都能被抽中
                     paused = False
-                    log.info("topic set: %r, lang=%s, first=%s",
-                             topic, language, AGENTS[rr_idx % len(AGENTS)].name)
+                    log.info("topic set: %r, lang=%s", topic, language)
                     await send({"type": "topic_set", "topic": topic, "language": language})
                 elif m.get("type") == "stop":
                     paused = True
@@ -509,8 +577,10 @@ async def ws(ws: WebSocket):
                 await asyncio.sleep(0.5)
                 continue
 
-            agent = AGENTS[rr_idx % len(AGENTS)]
-            rr_idx += 1
+            # 隨機抽下一位（排除上一位避免連兩次）
+            candidates = [a for a in AGENTS if a.name != last_speaker]
+            agent = random.choice(candidates)
+            last_speaker = agent.name
 
             await send({"type": "thinking", "candidates": [agent.name]})
 
