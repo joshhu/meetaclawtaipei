@@ -90,7 +90,7 @@ else
   wait_for_vllm 8002 qwen36
 
   drop_caches
-  log "→ nemotron (Nemotron 12B-VL, port 8003)"
+  log "→ nemotron (Nemotron 3 Nano 30B-A3B, port 8003)"
   docker compose up -d nemotron
   wait_for_vllm 8003 nemotron
 fi
