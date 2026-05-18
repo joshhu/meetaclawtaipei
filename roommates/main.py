@@ -179,7 +179,16 @@ class Agent:
     async def speak(self, history: list[dict], topic: str, on_event, language: str = "zh") -> str:
         """tool loop。on_event(dict) 是 callback 用來推 WS 訊息。"""
         log.info("speak(): name=%s language=%r", self.name, language)
-        msgs: list[dict] = [{"role": "system", "content": self.system_prompt(language)}]
+        # mood 併進 system content（避免 qwen 抱怨 system 不在開頭）
+        sys_content = self.system_prompt(language)
+        if language == "en":
+            mood = random.choice(MOODS_EN)
+            sys_content += f"\n\nStyle hint for THIS turn only: {mood} Vary your phrasing from previous turns."
+        else:
+            mood = random.choice(MOODS_ZH)
+            sys_content += f"\n\n本輪風格提示：{mood} 變換語氣別重複先前的開頭。"
+        msgs: list[dict] = [{"role": "system", "content": sys_content}]
+
         if topic:
             if language == "en":
                 msgs.append({"role": "user", "content": f"Today's panel topic: {topic}"})
@@ -188,19 +197,13 @@ class Agent:
         for h in history:
             sep = ":" if language == "en" else "："
             msgs.append({"role": "user", "content": f"[{h['speaker']}]{sep}{h['text']}"})
-        # mood 不直接寫在 user prompt（會被重複念出），改用 system 風格暗示
+
         if language == "en":
-            mood = random.choice(MOODS_EN)
-            msgs.append({"role": "system", "content":
-                f"Style hint for this turn: {mood} Vary your phrasing from previous turns."})
             msgs.append({"role": "user", "content":
                 f"Your turn, {self.name}. Reply ONLY with 1-2 short English sentences "
                 f"(max 25 words). Just speak — do not narrate your thinking or repeat the instructions. "
                 f"No Chinese characters."})
         else:
-            mood = random.choice(MOODS_ZH)
-            msgs.append({"role": "system", "content":
-                f"本輪風格提示：{mood} 變換語氣別重複先前的開頭。"})
             msgs.append({"role": "user", "content":
                 f"輪到你（{self.name}）發言。直接講、不要重複指令或描述你要怎麼做。"})
 
