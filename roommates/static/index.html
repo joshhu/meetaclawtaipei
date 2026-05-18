@@ -507,25 +507,36 @@ function clearSearching(speaker) {
 }
 
 // 音檔播放 — 收到 base64 → blob → Audio.play()
-// 維持單一 audio 物件，新音檔來就停掉舊的
 let currentAudio = null;
+let currentUrl = null;
 function playAudio(speaker, b64, fmt) {
   try {
     if (currentAudio) {
       currentAudio.pause();
-      currentAudio.src = "";
+      try { currentAudio.src = ""; } catch (_) {}
     }
-    // base64 → Uint8Array → Blob
+    if (currentUrl) { URL.revokeObjectURL(currentUrl); currentUrl = null; }
+
     const bin = atob(b64);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const blob = new Blob([bytes], {type: fmt === "wav" ? "audio/wav" : "audio/mpeg"});
+    const mime = fmt === "wav" ? "audio/wav" : "audio/mpeg";
+    const blob = new Blob([bytes], {type: mime});
     const url = URL.createObjectURL(blob);
+    currentUrl = url;
+    console.log(`[audio] ${speaker} ${bytes.length}B header=${bytes[0]},${bytes[1]},${bytes[2]},${bytes[3]} mime=${mime} url=${url}`);
     const audio = new Audio(url);
     audio.volume = 0.95;
-    audio.onended = () => URL.revokeObjectURL(url);
-    audio.onerror = () => console.error("audio error", speaker);
-    audio.play().catch(e => console.warn("audio.play() rejected:", e));
+    audio.onloadedmetadata = () => console.log(`[audio] ${speaker} loadedmetadata, dur=${audio.duration}s`);
+    audio.oncanplay = () => console.log(`[audio] ${speaker} canplay`);
+    audio.onended = () => { console.log(`[audio] ${speaker} ended`); URL.revokeObjectURL(url); };
+    audio.onerror = (ev) => {
+      const err = audio.error || {};
+      console.error(`[audio] ${speaker} ERROR code=${err.code} message=${err.message} networkState=${audio.networkState} readyState=${audio.readyState}`);
+    };
+    audio.play()
+      .then(() => console.log(`[audio] ${speaker} play() resolved`))
+      .catch(e => console.warn(`[audio] ${speaker} play() rejected:`, e.name, e.message));
     currentAudio = audio;
   } catch (e) {
     console.error("playAudio failed:", e);

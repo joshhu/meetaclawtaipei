@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import soundfile as sf
 import torch
 from fastapi import FastAPI, HTTPException
@@ -37,7 +38,16 @@ SPEAKERS = {
 }
 
 # Module 級 state（fastapi lifespan 初始化）
-STATE: dict = {"model": None, "prompts": {}}
+# refs[speaker] = (np.ndarray float32, sr) - 預先讀進來避免每次 IO
+STATE: dict = {"model": None, "refs": {}}
+
+# 標準生成參數 (測過 x_vector_only_mode + 完整 subtalker params 品質最好)
+GEN_KWARGS = dict(
+    temperature=1.0,
+    top_p=0.95,
+    subtalker_temperature=1.0,
+    subtalker_top_p=0.95,
+)
 
 
 def detect_language(text: str) -> str:
@@ -60,29 +70,19 @@ async def lifespan(app: FastAPI):
     STATE["model"] = model
     log.info("Model loaded in %.1fs", time.time() - t0)
 
-    # 預先生成 3 位 voice clone prompts（一次性開銷）
-    for speaker, (wav, txt) in SPEAKERS.items():
+    # 預先讀 3 位 reference audio 為 float32 ndarray (x_vector_only 模式不需 ref_text)
+    for speaker, (wav, _txt) in SPEAKERS.items():
         wav_path = VOICES_DIR / wav
-        txt_path = VOICES_DIR / txt
-        if not wav_path.exists() or not txt_path.exists():
-            log.warning("Missing voice files for %s (%s, %s) — skipping", speaker, wav_path, txt_path)
+        if not wav_path.exists():
+            log.warning("Missing voice file for %s (%s) — skipping", speaker, wav_path)
             continue
-        ref_text = txt_path.read_text(encoding="utf-8").strip()[:300]
-        log.info("Building voice clone prompt for %s ...", speaker)
-        t0 = time.time()
-        try:
-            prompt = model.create_voice_clone_prompt(
-                ref_audio=str(wav_path),
-                ref_text=ref_text,
-            )
-            STATE["prompts"][speaker] = prompt
-            log.info("  %s prompt built in %.1fs", speaker, time.time() - t0)
-        except Exception as e:
-            log.exception("create_voice_clone_prompt failed for %s: %s", speaker, e)
-            # fallback：runtime 才用 ref_audio + ref_text
-            STATE["prompts"][speaker] = None
+        ref_wav, ref_sr = sf.read(str(wav_path), dtype="float32", always_2d=False)
+        if ref_wav.ndim > 1:
+            ref_wav = ref_wav.mean(axis=1)
+        STATE["refs"][speaker] = (ref_wav, int(ref_sr))
+        log.info("Loaded ref audio for %s: %.1fs @ %d Hz", speaker, len(ref_wav)/ref_sr, ref_sr)
 
-    log.info("Ready. Speakers: %s", list(STATE["prompts"].keys()))
+    log.info("Ready. Speakers: %s", list(STATE["refs"].keys()))
     yield
     log.info("Shutting down")
 
@@ -111,7 +111,7 @@ def estimate_tokens(text: str, language: str) -> int:
 async def health():
     return {
         "ok": STATE["model"] is not None,
-        "speakers": list(STATE["prompts"].keys()),
+        "speakers": list(STATE["refs"].keys()),
     }
 
 
@@ -120,8 +120,8 @@ async def tts(req: TTSRequest):
     if STATE["model"] is None:
         raise HTTPException(503, "Model not loaded yet")
     speaker = req.speaker
-    if speaker not in SPEAKERS:
-        raise HTTPException(400, f"Unknown speaker {speaker}; available={list(SPEAKERS)}")
+    if speaker not in STATE["refs"]:
+        raise HTTPException(400, f"Unknown speaker {speaker}; available={list(STATE['refs'])}")
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(400, "Empty text")
@@ -130,19 +130,18 @@ async def tts(req: TTSRequest):
 
     language = req.language or detect_language(text)
     model = STATE["model"]
-    prompt = STATE["prompts"].get(speaker)
+    ref_wav, ref_sr = STATE["refs"][speaker]
     max_new_tokens = req.max_new_tokens or estimate_tokens(text, language)
 
     def _gen():
-        kw = dict(text=text, language=language, max_new_tokens=max_new_tokens, do_sample=False)
-        if prompt is not None:
-            kw["voice_clone_prompt"] = prompt
-        else:
-            # fallback：直接帶 ref_audio + ref_text
-            wav, txt = SPEAKERS[speaker]
-            kw["ref_audio"] = str(VOICES_DIR / wav)
-            kw["ref_text"] = (VOICES_DIR / txt).read_text(encoding="utf-8").strip()[:300]
-        return model.generate_voice_clone(**kw)
+        return model.generate_voice_clone(
+            text=text,
+            language=language,
+            ref_audio=(ref_wav, ref_sr),
+            x_vector_only_mode=True,
+            max_new_tokens=max_new_tokens,
+            **GEN_KWARGS,
+        )
 
     t0 = time.time()
     try:
