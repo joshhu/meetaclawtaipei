@@ -15,10 +15,14 @@ from pathlib import Path
 
 import httpx
 from ddgs import DDGS
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
+
+# 載入專案根目錄（roommates 的上一層）的 .env，取得 BRAVE_API_KEY 等設定
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 TTS_URL = os.environ.get("TTS_URL", "http://localhost:5051")
 TTS_TIMEOUT = float(os.environ.get("TTS_TIMEOUT", "30"))
@@ -34,7 +38,7 @@ SEARCH_TOOL = {
     "function": {
         "name": "web_search",
         "description": (
-            "Search the web with DuckDuckGo for current information, news, or facts. "
+            "Search the web for current information, news, or facts. "
             "Use this when you need up-to-date data that may have changed after your training cutoff."
         ),
         "parameters": {
@@ -51,17 +55,52 @@ SEARCH_TOOL = {
 }
 
 
-async def web_search(query: str, max_results: int = 5) -> str:
-    """同步 ddgs 包進 async。回傳格式化字串給 LLM 讀。"""
+BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "").strip()
+BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
+_brave_client = httpx.AsyncClient(timeout=15)
+
+
+async def _brave_search(query: str, max_results: int) -> list[dict]:
+    """打 Brave Search REST API，回傳 {title, body, href} list（與 ddgs 同形）。"""
+    r = await _brave_client.get(
+        BRAVE_URL,
+        params={"q": query, "count": max_results, "search_lang": "en", "text_decorations": "false"},
+        headers={
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "X-Subscription-Token": BRAVE_API_KEY,
+        },
+    )
+    r.raise_for_status()
+    web = (r.json().get("web") or {}).get("results") or []
+    return [
+        {"title": x.get("title", ""), "body": x.get("description", ""), "href": x.get("url", "")}
+        for x in web
+    ]
+
+
+async def _ddg_search(query: str, max_results: int) -> list[dict]:
+    """DDG fallback（同步 ddgs 包進 thread）。"""
     def _do():
         with DDGS() as ddgs:
             return list(ddgs.text(query, max_results=max_results))
+    return await asyncio.wait_for(asyncio.to_thread(_do), timeout=20)
 
-    try:
-        results = await asyncio.wait_for(asyncio.to_thread(_do), timeout=20)
-    except Exception as e:
-        log.warning("web_search failed: %s", e)
-        return f"(搜尋失敗：{e})"
+
+async def web_search(query: str, max_results: int = 5) -> str:
+    """有 BRAVE_API_KEY 就用 Brave，失敗或無 key 則 fallback 回 DDG。回傳格式化字串給 LLM 讀。"""
+    results: list[dict] = []
+    if BRAVE_API_KEY:
+        try:
+            results = await _brave_search(query, max_results)
+        except Exception as e:
+            log.warning("brave_search failed, fallback to DDG: %s", e)
+    if not results:
+        try:
+            results = await _ddg_search(query, max_results)
+        except Exception as e:
+            log.warning("web_search failed: %s", e)
+            return f"(搜尋失敗：{e})"
 
     if not results:
         return "(無搜尋結果)"
